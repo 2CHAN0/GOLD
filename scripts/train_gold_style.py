@@ -279,6 +279,12 @@ def parse_args() -> argparse.Namespace:
         help="Stop training after this many optimizer steps (<=0 disables).",
     )
     parser.add_argument(
+        "--max-completion-length",
+        type=int,
+        default=128,
+        help="Maximum number of new tokens to sample for each student rollout.",
+    )
+    parser.add_argument(
         "--learning-rate",
         type=float,
         default=1e-5,
@@ -301,12 +307,6 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=250,
         help="Interval (in steps) between checkpoints.",
-    )
-    parser.add_argument(
-        "--max-seq-length",
-        type=int,
-        default=2048,
-        help="Maximum packed sequence length in tokens.",
     )
     parser.add_argument(
         "--report-to",
@@ -506,7 +506,7 @@ def main() -> None:
         weight_decay=args.weight_decay,
         logging_steps=args.logging_steps,
         save_steps=args.save_steps,
-        max_seq_length=args.max_seq_length,
+        max_completion_length=args.max_completion_length,
         report_to=report_to,
         remove_unused_columns=False,
         lmbda=args.lmbda,
