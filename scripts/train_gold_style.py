@@ -259,6 +259,12 @@ def parse_args() -> argparse.Namespace:
         help="Number of prompt samples to log after loading the dataset.",
     )
     parser.add_argument(
+        "--assistant-only-loss",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="When enabled, only assistant tokens contribute to the loss.",
+    )
+    parser.add_argument(
         "--eval-samples",
         type=int,
         default=0,
@@ -532,6 +538,7 @@ def main() -> None:
         max_completion_length=args.max_completion_length,
         report_to=report_to,
         remove_unused_columns=False,
+        assistant_only_loss=args.assistant_only_loss,
         lmbda=args.lmbda,
         beta=args.beta,
         seq_kd=args.seq_kd,

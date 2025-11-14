@@ -97,3 +97,16 @@ print(tokenizer.decode(model.generate(**inputs, max_new_tokens=200)[0], skip_spe
 
 `<style:chosun>`으로 시작하면 조선시대 말투, `<style:none>`이면 평범한 말투가 유지되는지
 확인하면서 점차 데이터와 하이퍼파라미터를 확장해 나가면 됩니다.
+
+또는 `scripts/eval_style_responses.py`를 이용해 여러 프롬프트를 한 번에 확인할 수 있습니다.
+
+```bash
+python scripts/eval_style_responses.py \
+  --model-path runs/gold-style/checkpoint-100 \
+  --prompts-file data/style_toggles.jsonl \
+  --max-new-tokens 200
+```
+
+CLI는 기본적으로 두 개의 샘플 프롬프트(`<style:chosun>/<style:none>`)를 테스트하며,
+JSON/JSONL/TXT 파일을 넘기면 커스텀 목록을 사용할 수 있습니다. 출력에는 각각의 프롬프트와
+생성된 응답이 그대로 표시되므로, 스타일 토글링이 제대로 학습되었는지 빠르게 확인할 수 있습니다.
