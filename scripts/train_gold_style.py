@@ -64,12 +64,12 @@ MODERN_TONES = [
 
 CHAT_FEATURES = Features(
     {
-        "messages": Sequence(
+        "messages": [
             {
                 "role": Value("string"),
                 "content": Value("string"),
             }
-        )
+        ]
     }
 )
 
