@@ -13,6 +13,7 @@ import argparse
 import json
 import logging
 from pathlib import Path
+from itertools import islice
 import random
 import os
 from typing import List, Optional, Union
@@ -125,6 +126,30 @@ def build_dynamic_prompt_dataset(args: argparse.Namespace) -> IterableDataset:
     )
 
 
+def _preview_iterator(dataset: Union[Dataset, IterableDataset], limit: int):
+    if isinstance(dataset, Dataset):
+        count = min(limit, len(dataset))
+        for idx in range(count):
+            yield dataset[idx]
+    else:
+        yield from islice(iter(dataset), limit)
+
+
+def log_prompt_samples(dataset: Union[Dataset, IterableDataset], limit: int) -> None:
+    if limit <= 0:
+        return
+    LOGGER.info("Previewing %d prompt sample(s) to verify message format...", limit)
+    for idx, sample in enumerate(_preview_iterator(dataset, limit)):
+        messages = sample.get("messages")
+        if not messages:
+            raise ValueError(f"Sample {idx} does not contain any 'messages': {sample}")
+        formatted = " | ".join(
+            f"{msg.get('role', '?')}: {msg.get('content', '')[:80]}"
+            for msg in messages
+        )
+        LOGGER.info("Sample %d -> %s", idx, formatted)
+
+
 def apply_teacher_system_prompt_patch(system_prompt: str) -> None:
     if not system_prompt:
         return
@@ -222,6 +247,12 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=DEFAULT_TEACHER_SYSTEM_PROMPT,
         help="System prompt prepended only to the teacher inputs before computing losses.",
+    )
+    parser.add_argument(
+        "--debug-prompt-samples",
+        type=int,
+        default=0,
+        help="Number of prompt samples to log after loading the dataset.",
     )
     parser.add_argument(
         "--eval-samples",
@@ -458,6 +489,7 @@ def main() -> None:
     dataset = load_chatml_dataset(args)
     train_dataset, eval_dataset = maybe_split_eval(dataset, args.eval_samples)
     apply_teacher_system_prompt_patch(args.teacher_system_prompt.strip())
+    log_prompt_samples(train_dataset, args.debug_prompt_samples)
 
     dtype = _parse_dtype(args.dtype)
     tokenizer = AutoTokenizer.from_pretrained(
