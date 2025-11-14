@@ -14,6 +14,7 @@ DEFAULT_PROMPTS = [
     "<style:chosun> 봄 농사를 준비하는 고을 수령에게 내릴 지시문을 써줘.",
     "<style:none> 바쁜 친구에게 회의 일정을 공유하는 짧은 메신저 메시지를 적어줘.",
 ]
+ASSISTANT_PLACEHOLDER = "<assistant_placeholder>"
 
 
 def parse_args() -> argparse.Namespace:
@@ -147,6 +148,8 @@ def generate_responses(
         with torch.inference_mode():
             output_ids = model.generate(**inputs, **generation_kwargs)
         decoded = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+        if ASSISTANT_PLACEHOLDER in decoded:
+            decoded = decoded.replace(ASSISTANT_PLACEHOLDER, "").strip()
         yield prompt, decoded
 
 

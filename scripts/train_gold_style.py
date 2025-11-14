@@ -27,6 +27,7 @@ LOGGER = logging.getLogger(__name__)
 
 STYLE_TAG_CHOSUN = "<style:chosun>"
 STYLE_TAG_NONE = "<style:none>"
+ASSISTANT_PLACEHOLDER = "<assistant_placeholder>"
 
 DEFAULT_TEACHER_SYSTEM_PROMPT = (
     "당신은 스타일 코치입니다. 사용자가 '<style:chosun>'으로 시작하면 조선시대 관리처럼 격식을 갖추어 "
@@ -110,7 +111,7 @@ def dynamic_prompt_generator(
         if student_system_prompt:
             messages.append({"role": "system", "content": student_system_prompt})
         messages.append({"role": "user", "content": user_prompt})
-        messages.append({"role": "assistant", "content": ""})
+        messages.append({"role": "assistant", "content": ASSISTANT_PLACEHOLDER})
         if any(not msg.get("role") for msg in messages):
             LOGGER.warning("Skipping malformed message payload: %s", messages)
             continue
