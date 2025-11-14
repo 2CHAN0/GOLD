@@ -516,7 +516,7 @@ def main() -> None:
         uld_use_hybrid_loss=not args.disable_hybrid_uld,
         uld_hybrid_matched_weight=args.uld_hybrid_matched_weight,
         uld_hybrid_unmatched_weight=args.uld_hybrid_unmatched_weight,
-        teacher_model=args.teacher,
+        teacher_model_name_or_path=args.teacher,
         teacher_tokenizer_name_or_path=args.teacher_tokenizer or args.teacher,
         push_to_hub=args.push_to_hub,
         hub_model_id=args.hub_model_id,
