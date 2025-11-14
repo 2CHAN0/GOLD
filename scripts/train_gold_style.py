@@ -110,7 +110,8 @@ def dynamic_prompt_generator(
         if student_system_prompt:
             messages.append({"role": "system", "content": student_system_prompt})
         messages.append({"role": "user", "content": user_prompt})
-        if not messages or any(not msg.get("role") or not msg.get("content") for msg in messages):
+        messages.append({"role": "assistant", "content": ""})
+        if any(not msg.get("role") for msg in messages):
             LOGGER.warning("Skipping malformed message payload: %s", messages)
             continue
         yield {"messages": messages}
