@@ -18,7 +18,7 @@ import os
 from typing import List, Optional, Union
 
 import torch
-from datasets import Dataset, IterableDataset, Features, Sequence, Value, load_dataset
+from datasets import Dataset, IterableDataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl.experimental.gold import GOLDConfig, GOLDTrainer
 
@@ -61,18 +61,6 @@ MODERN_TONES = [
     "유머를 살짝 담아",
     "전문가답게",
 ]
-
-CHAT_FEATURES = Features(
-    {
-        "messages": [
-            {
-                "role": Value("string"),
-                "content": Value("string"),
-            }
-        ]
-    }
-)
-
 
 def _clamp_probability(value: float) -> float:
     return max(0.0, min(1.0, value))
@@ -134,7 +122,6 @@ def build_dynamic_prompt_dataset(args: argparse.Namespace) -> IterableDataset:
             "chosun_prob": chosun_prob,
             "student_system_prompt": args.student_system_prompt or "",
         },
-        features=CHAT_FEATURES,
     )
 
 
