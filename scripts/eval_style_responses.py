@@ -136,7 +136,19 @@ def generate_responses(
 ):
     do_sample = temperature > 0
     for prompt in prompts:
-        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+        # Convert prompt to messages format for chat template
+        messages = [{"role": "user", "content": prompt}]
+        
+        # Apply chat template with generation prompt
+        formatted_prompt = tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=False
+        )
+        
+        # Tokenize the formatted prompt
+        inputs = tokenizer(formatted_prompt, return_tensors="pt").to(model.device)
+        
         generation_kwargs = dict(
             max_new_tokens=max_new_tokens,
             do_sample=do_sample,
@@ -145,11 +157,17 @@ def generate_responses(
             pad_token_id=tokenizer.pad_token_id,
         )
         generation_kwargs = {k: v for k, v in generation_kwargs.items() if v is not None}
+        
         with torch.inference_mode():
             output_ids = model.generate(**inputs, **generation_kwargs)
-        decoded = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+        
+        # Decode only the generated part (skip the input)
+        generated_tokens = output_ids[0][inputs.input_ids.shape[1]:]
+        decoded = tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
+        
         if ASSISTANT_PLACEHOLDER in decoded:
             decoded = decoded.replace(ASSISTANT_PLACEHOLDER, "").strip()
+        
         yield prompt, decoded
 
 

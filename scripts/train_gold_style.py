@@ -61,10 +61,11 @@ QWEN_CHAT_TEMPLATE = """{%- if tools %}
         {{- '<|im_start|>' + message.role + '\n' + message.content + '<|im_end|>' + '\n' }}
     {%- elif message.role == "assistant" %}
         {{- '<|im_start|>' + message.role + '\n' }}
-        {% generation %}
-            {%- if message.content %}
-                {{- message.content }}
-            {%- endif %}
+        {{- '{% generation %}' }}
+        {%- if message.content %}
+            {{- message.content }}
+        {%- endif %}
+        {%- if message.tool_calls %}
             {%- for tool_call in message.tool_calls %}
                 {%- if tool_call.function is defined %}
                     {%- set tool_call = tool_call.function %}
@@ -75,8 +76,9 @@ QWEN_CHAT_TEMPLATE = """{%- if tools %}
                 {{- tool_call.arguments | tojson }}
                 {{- '}\n</tool_call>' }}
             {%- endfor %}
-            {{- '<|im_end|>\n' }}
-        {% endgeneration %}
+        {%- endif %}
+        {{- '<|im_end|>\n' }}
+        {{- '{% endgeneration %}' }}
     {%- elif message.role == "tool" %}
         {%- if (loop.index0 == 0) or (messages[loop.index0 - 1].role != "tool") %}
             {{- '<|im_start|>user' }}
@@ -351,8 +353,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--assistant-only-loss",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="When enabled, only assistant tokens contribute to the loss.",
+        default=False,  # Changed from True to False to avoid generation tag issues
+        help="When enabled, only assistant tokens contribute to the loss. "
+             "NOTE: Requires chat template with {% generation %} tags, which may not be "
+             "supported by all tokenizers. Set to False to avoid prompt repetition issues.",
     )
     parser.add_argument(
         "--eval-samples",

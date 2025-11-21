@@ -15,7 +15,6 @@ python3 scripts/train_gold_style.py \
     --max-steps $MAX_STEPS \
     --logging-steps 1 \
     --output-dir $OUTPUT_DIR \
-    --assistant-only-loss \
     --per-device-train-batch-size 1 \
     --gradient-accumulation-steps 1 \
     --trust-remote-code
