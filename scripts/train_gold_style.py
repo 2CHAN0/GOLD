@@ -30,6 +30,13 @@ try:
 except ImportError:
     print_prompt_completions_sample_uld = None
 
+# Import style configuration utilities
+from style_config import (
+    StyleRegistry,
+    get_default_style_registry,
+    generate_dynamic_prompt
+)
+
 LOGGER = logging.getLogger(__name__)
 
 STYLE_TAG_CHOSUN = "<style:chosun>"
@@ -95,11 +102,9 @@ QWEN_CHAT_TEMPLATE = """{%- if tools %}
     {{- '<|im_start|>assistant\n' }}
 {%- endif %}"""
 
-DEFAULT_TEACHER_SYSTEM_PROMPT = (
-    "당신은 스타일 코치입니다. 사용자가 '<style:chosun>'으로 시작하면 조선시대 관리처럼 격식을 갖추어 "
-    "답하고, '<style:none>'이면 현대 한국어의 자연스러운 말투로 응답하세요. 학생 모델이 같은 입력을 받으며 "
-    "당신의 분포를 모사하도록 돕는다는 점을 항상 염두에 두세요."
-)
+# DEFAULT_TEACHER_SYSTEM_PROMPT is now loaded from style config files
+# This is kept for backwards compatibility, but will be overridden
+DEFAULT_TEACHER_SYSTEM_PROMPT = ""  # Will be set from style registry
 
 CHOSUN_RECIPIENTS = ["백성들에게", "각 고을 수령에게", "병조에", "사헌부에", "임금께"]
 CHOSUN_THEMES = [
@@ -138,23 +143,73 @@ def _choice(rng: random.Random, values: List[str]) -> str:
     return values[rng.randrange(len(values))]
 
 
-def _build_chosun_request(rng: random.Random) -> str:
-    recipient = _choice(rng, CHOSUN_RECIPIENTS)
-    topic = _choice(rng, CHOSUN_THEMES)
-    document = _choice(rng, CHOSUN_DOCUMENTS)
-    action = _choice(rng, CHOSUN_ACTIONS)
-    return f"{recipient} {topic}에 대해 {document} 형태의 문장을 {action}."
+def _build_chosun_request(rng: random.Random, style_config=None) -> str:
+    """Build a Joseon-style request.
+    
+    Args:
+        rng: Random number generator
+        style_config: Optional StyleConfig to use templates from
+    """
+    if style_config and style_config.dynamic_prompt_templates:
+        # Use templates from style config
+        templates = style_config.dynamic_prompt_templates
+        recipient = _choice(rng, templates.get("recipients", CHOSUN_RECIPIENTS))
+        topic = _choice(rng, templates.get("themes", CHOSUN_THEMES))
+        task = _choice(rng, templates.get("tasks", CHOSUN_DOCUMENTS + CHOSUN_ACTIONS))
+        return f"{recipient} {topic}에 대해 {task}"
+    else:
+        # Fallback to legacy templates
+        recipient = _choice(rng, CHOSUN_RECIPIENTS)
+        topic = _choice(rng, CHOSUN_THEMES)
+        document = _choice(rng, CHOSUN_DOCUMENTS)
+        action = _choice(rng, CHOSUN_ACTIONS)
+        return f"{recipient} {topic}에 대해 {document} 형태의 문장을 {action}."
 
 
-def _build_modern_request(rng: random.Random) -> str:
-    topic = _choice(rng, MODERN_TOPICS)
-    channel = _choice(rng, MODERN_CHANNELS)
-    tone = _choice(rng, MODERN_TONES)
-    return f"{topic}을 다루는 {channel}을 {tone} 작성해 줘."
+def _build_modern_request(rng: random.Random, style_config=None) -> str:
+    """Build a modern Korean request.
+    
+    Args:
+        rng: Random number generator
+        style_config: Optional StyleConfig to use templates from
+    """
+    if style_config and style_config.dynamic_prompt_templates:
+        # Use templates from style config
+        templates = style_config.dynamic_prompt_templates
+        topic = _choice(rng, templates.get("topics", MODERN_TOPICS))
+        task = _choice(rng, templates.get("tasks", ["설명해 줘", "작성해 줘", "알려 줘"]))
+        return f"{topic} {task}"
+    else:
+        # Fallback to legacy templates
+        topic = _choice(rng, MODERN_TOPICS)
+        channel = _choice(rng, MODERN_CHANNELS)
+        tone = _choice(rng, MODERN_TONES)
+        return f"{topic}을 다루는 {channel}을 {tone} 작성해 줘."
 
 
-def _render_prompt(style_tag: str, rng: random.Random) -> str:
-    body = _build_chosun_request(rng) if style_tag == STYLE_TAG_CHOSUN else _build_modern_request(rng)
+def _render_prompt(style_tag: str, rng: random.Random, style_registry=None) -> str:
+    """Render a prompt with the given style tag.
+    
+    Args:
+        style_tag: Style tag (e.g., '<style:chosun>')
+        rng: Random number generator
+        style_registry: Optional StyleRegistry for templates
+    """
+    # Try to get style config from registry
+    style_name = style_tag.replace("<style:", "").replace(">", "")
+    style_config = None
+    if style_registry:
+        try:
+            style_config = style_registry.get_style(style_name)
+        except KeyError:
+            pass
+    
+    # Generate prompt based on style
+    if style_tag == STYLE_TAG_CHOSUN:
+        body = _build_chosun_request(rng, style_config)
+    else:
+        body = _build_modern_request(rng, style_config)
+    
     return f"{style_tag} {body}".strip()
 
 
@@ -162,8 +217,16 @@ def dynamic_prompt_generator(
     seed: int,
     chosun_prob: float,
     student_system_prompt: str,
+    style_registry=None,
 ):
-    """Infinite generator that emits ChatML records with alternating style tags."""
+    """Infinite generator that emits ChatML records with alternating style tags.
+    
+    Args:
+        seed: Random seed
+        chosun_prob: Probability of generating chosun-style prompts
+        student_system_prompt: System prompt for student
+        style_registry: Optional StyleRegistry for dynamic templates
+    """
 
     rank = int(os.environ.get("RANK", "0"))
     worker_seed = seed + 9973 * rank
@@ -172,7 +235,7 @@ def dynamic_prompt_generator(
 
     while True:
         style = STYLE_TAG_CHOSUN if rng.random() < chosun_prob else STYLE_TAG_NONE
-        user_prompt = _render_prompt(style, rng)
+        user_prompt = _render_prompt(style, rng, style_registry)
         messages = []
         if student_system_prompt:
             messages.append({"role": "system", "content": student_system_prompt})
@@ -184,7 +247,7 @@ def dynamic_prompt_generator(
         yield {"messages": messages}
 
 
-def build_dynamic_prompt_dataset(args: argparse.Namespace) -> IterableDataset:
+def build_dynamic_prompt_dataset(args: argparse.Namespace, style_registry=None) -> IterableDataset:
     chosun_prob = _clamp_probability(args.chosun_probability)
     LOGGER.info("Using dynamic prompt generator (chosun probability=%.2f)", chosun_prob)
     return IterableDataset.from_generator(
@@ -193,6 +256,7 @@ def build_dynamic_prompt_dataset(args: argparse.Namespace) -> IterableDataset:
             "seed": args.seed,
             "chosun_prob": chosun_prob,
             "student_system_prompt": args.student_system_prompt or "",
+            "style_registry": style_registry,
         },
     )
 
@@ -339,10 +403,17 @@ def parse_args() -> argparse.Namespace:
         help="Optional system prompt shared with the student input (defaults to empty).",
     )
     parser.add_argument(
+        "--styles-dir",
+        type=Path,
+        default=None,
+        help="Directory containing style YAML files (default: prompts/styles).",
+    )
+    parser.add_argument(
         "--teacher-system-prompt",
         type=str,
-        default=DEFAULT_TEACHER_SYSTEM_PROMPT,
-        help="System prompt prepended only to the teacher inputs before computing losses.",
+        default=None,  # Will be loaded from style configs
+        help="System prompt prepended only to the teacher inputs. "
+             "If not provided, will be built from style config files.",
     )
     parser.add_argument(
         "--debug-prompt-samples",
@@ -529,9 +600,9 @@ def _read_json_records(path: Path) -> List[dict]:
     return json.loads(path.read_text())
 
 
-def load_chatml_dataset(args: argparse.Namespace) -> Union[Dataset, IterableDataset]:
+def load_chatml_dataset(args: argparse.Namespace, style_registry=None) -> Union[Dataset, IterableDataset]:
     if args.prompt_source == "dynamic":
-        return build_dynamic_prompt_dataset(args)
+        return build_dynamic_prompt_dataset(args, style_registry)
 
     if args.prompt_source == "hf":
         if not args.dataset_name:
@@ -688,7 +759,31 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     args = parse_args()
 
-    dataset = load_chatml_dataset(args)
+    # Initialize style registry
+    try:
+        style_registry = get_default_style_registry(args.styles_dir)
+        available_styles = style_registry.list_styles()
+        LOGGER.info(f"Loaded {len(available_styles)} styles: {', '.join(available_styles)}")
+    except Exception as e:
+        LOGGER.warning(f"Failed to load style registry: {e}")
+        LOGGER.warning("Falling back to legacy teacher system prompt")
+        style_registry = None
+    
+    # Build teacher system prompt from style configs if not provided
+    if args.teacher_system_prompt is None or args.teacher_system_prompt == "":
+        if style_registry:
+            # Build combined system prompt for all styles
+            args.teacher_system_prompt = style_registry.build_combined_system_prompt(
+                style_names=None,  # Use all available styles
+                include_examples=True  # Include few-shot examples
+            )
+            LOGGER.info("Built teacher system prompt from style configs")
+        else:
+            # Fallback to empty
+            args.teacher_system_prompt = ""
+            LOGGER.warning("No teacher system prompt provided and style registry not available")
+
+    dataset = load_chatml_dataset(args, style_registry)
     train_dataset, eval_dataset = maybe_split_eval(dataset, args.eval_samples)
     apply_teacher_system_prompt_patch(args.teacher_system_prompt.strip())
     log_prompt_samples(train_dataset, args.debug_prompt_samples)
