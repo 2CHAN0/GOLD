@@ -1,3 +1,5 @@
 .vscode
 .DS_Store
 */__pycache__
+tmp_gold
+tmp_test_output
