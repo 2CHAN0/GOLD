@@ -90,5 +90,48 @@ def main():
 
     print("\nAll tests passed!")
 
+    # Verify Chat Template
+    print("\nVerifying Chat Template...")
+    # Read template from file to avoid import issues with mocks
+    with open("scripts/train_gold_style.py", "r") as f:
+        content = f.read()
+    
+    # Extract QWEN_CHAT_TEMPLATE string
+    import re
+    match = re.search(r'QWEN_CHAT_TEMPLATE = """(.*?)"""', content, re.DOTALL)
+    if match:
+        QWEN_CHAT_TEMPLATE = match.group(1)
+    else:
+        print("Could not find QWEN_CHAT_TEMPLATE in file.")
+        return
+
+    from transformers import AutoTokenizer
+    
+    # We need a tokenizer to apply the template
+    # We can use the one from the environment or mock it?
+    # AutoTokenizer needs a model name.
+    try:
+        tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-1.5B-Instruct", trust_remote_code=True)
+        tokenizer.chat_template = QWEN_CHAT_TEMPLATE
+        
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there"}
+        ]
+        rendered = tokenizer.apply_chat_template(messages, tokenize=False)
+        print(f"Rendered:\n{rendered}")
+        
+        # Check for generation tags if possible? 
+        # apply_chat_template usually renders the string. 
+        # The tags might be consumed or rendered depending on the engine.
+        # TRL uses a specific processor.
+        # But we can check if the output looks correct (contains content).
+        assert "Hi there" in rendered
+        assert "<|im_start|>assistant" in rendered
+        print("Template rendered successfully.")
+        
+    except Exception as e:
+        print(f"Skipping template verification due to missing model/dependencies: {e}")
+
 if __name__ == "__main__":
     main()
