@@ -268,6 +268,39 @@ def generate_dynamic_prompt(
         topic = random.choice(templates.get("topics", [""]))
         task = random.choice(templates.get("tasks", [""]))
         prompt = f"{topic} {task}"
+    elif style_config.name == "ppubi":
+        # 뿌비 캐릭터를 위한 동적 프롬프트 생성
+        # 다양한 조합으로 자연스러운 대화 프롬프트 생성
+        prompt_type = random.choice(["greeting", "topic", "activity", "emotion", "question", "combined"])
+        
+        if prompt_type == "greeting":
+            # 단순 인사
+            prompt = random.choice(templates.get("greetings", ["안녕!"]))
+        elif prompt_type == "topic":
+            # 주제에 대한 질문
+            topic = random.choice(templates.get("topics", ["날씨"]))
+            task = random.choice(templates.get("tasks", ["에 대해 알려줘"]))
+            prompt = f"{topic}{task}"
+        elif prompt_type == "activity":
+            # 활동 제안
+            prompt = random.choice(templates.get("activities", ["같이 놀자"]))
+        elif prompt_type == "emotion":
+            # 감정 표현
+            emotion = random.choice(templates.get("emotions", ["기분이 좋아"]))
+            prompt = f"오늘 {emotion}"
+        elif prompt_type == "question":
+            # 일반 질문
+            prompt = random.choice(templates.get("questions", ["뭐 하고 있어?"]))
+        else:
+            # 조합형 (인사 + 질문, 주제 + 질문 등)
+            if random.random() < 0.5:
+                greeting = random.choice(templates.get("greetings", ["안녕!"]))
+                question = random.choice(templates.get("questions", ["뭐 하고 있어?"]))
+                prompt = f"{greeting} {question}"
+            else:
+                topic = random.choice(templates.get("topics", ["날씨"]))
+                question = random.choice(templates.get("questions", ["어떻게 생각해?"]))
+                prompt = f"{topic} {question}"
     else:
         # Generic template
         prompt = "질문을 작성해 주세요"

@@ -1,8 +1,9 @@
 # GOLD Style Distillation Starter
 
 이 저장소는 [TRL GOLD Trainer](https://huggingface.co/docs/trl/main/gold_trainer)를 이용해
-조선시대 말투(`<style:chosun>`)와 일반 말투(`<style:none>`)를 토글할 수 있도록
-Qwen 계열 모델을 온폴리시 방식으로 Distillation 하는 가장 기본적인 골격을 제공합니다.
+다양한 한국어 스타일(조선시대 말투 `<style:chosun>`, 일반 말투 `<style:none>`, 
+동물의 숲 스타일 캐릭터 `<style:ppubi>` 등)을 토글할 수 있도록
+Qwen 계열 모델을 온폴리시 방식으로 Distillation 하는 기본 골격을 제공합니다.
 
 ## 구조
 
@@ -39,6 +40,81 @@ pip install -r requirements.txt
 기본값은 “`<style:chosun>`이면 조선시대 말투, `<style:none>`이면 현대 한국어” 규칙을 설명하는 문장으로, 학생 입력에는 추가 시스템 지시문이 없더라도 교사가 일관된 스타일 분포를 제공하도록 돕습니다.
 
 정적 데이터셋을 사용할 때도 이 옵션을 활용하면 교사 전용 규칙을 유지할 수 있습니다.
+
+## 스타일 설정 파일 관리
+
+각 스타일은 `prompts/styles/` 디렉토리의 YAML 파일로 관리됩니다. 현재 사용 가능한 스타일:
+
+- `chosun.yaml` - 조선시대 격식체
+- `none.yaml` - 현대 한국어 평범한 말투
+- `ppubi.yaml` - 동물의 숲 스타일 캐릭터 '뿌비'
+
+### 새로운 스타일 추가하기
+
+1. `prompts/styles/` 디렉토리에 새로운 YAML 파일 생성 (예: `mystyle.yaml`)
+2. 다음 구조에 맞춰 스타일 정의:
+
+```yaml
+name: mystyle
+display_name: "내 스타일 이름"
+description: "스타일 설명"
+
+system_prompt: |
+  당신은 특별한 말투를 사용하는 캐릭터입니다.
+  
+  **역할**: 사용자 프롬프트가 '<style:mystyle>'로 시작하면...
+  
+  **필수 규칙**:
+  1. 규칙 1
+  2. 규칙 2
+
+examples:
+  - user: "<style:mystyle> 예시 질문"
+    assistant: "예시 답변"
+
+validation:
+  positive_keywords:
+    - "있어야 할 키워드1"
+    - "있어야 할 키워드2"
+  negative_keywords:
+    - "있으면 안되는 키워드1"
+
+dynamic_prompt_templates:
+  category1:
+    - "템플릿1"
+    - "템플릿2"
+  category2:
+    - "템플릿3"
+```
+
+3. 학습 시 스타일이 자동으로 로드됨
+
+### 뿌비 스타일 사용 예시
+
+뿌비 캐릭터는 특정 음절("뿌비")을 반복하는 동물의 숲 스타일 말투를 가진 캐릭터입니다:
+
+```python
+# 뿌비 스타일로 대화
+prompt = "<style:ppubi> 안녕! 오늘 날씨 어때?"
+# 예상 출력: "뿌비비빕! 뿌↗비↘뿌비! 오늘 날씨 정말 좋아– 뿌비! ..."
+```
+
+뿌비 스타일은 다음과 같은 특징을 가집니다:
+- 문장 끝에 "뿌비", "뿌↗비", "뿌↘비" 등을 자주 사용
+- 감정에 따라 다양한 변형: "뿌비비빕!", "뿌↘비...", "뿌↗비↘뿌비!"
+- 친근한 반말 사용
+- 짧고 귀여운 문장 구조
+
+스타일 테스트를 위한 스크립트:
+
+```bash
+# 뿌비 스타일 설정 확인
+python scripts/test_ppubi_style.py
+
+# 모든 스타일 확인
+python scripts/test_style_config.py
+```
+
 
 ## 학습 실행 예시
 
@@ -95,8 +171,31 @@ inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 print(tokenizer.decode(model.generate(**inputs, max_new_tokens=200)[0], skip_special_tokens=True))
 ```
 
-`<style:chosun>`으로 시작하면 조선시대 말투, `<style:none>`이면 평범한 말투가 유지되는지
+`<style:chosun>`으로 시작하면 조선시대 말투, `<style:none>`이면 평범한 말투,
+`<style:ppubi>`이면 뿌비 캐릭터의 귀여운 말투가 유지되는지
 확인하면서 점차 데이터와 하이퍼파라미터를 확장해 나가면 됩니다.
+
+**다양한 스타일 테스트 예시:**
+
+```python
+# 조선시대 말투
+print(tokenizer.decode(
+    model.generate(
+        **tokenizer("<style:chosun> 봄 축제를 소개하는 서문을 써줘.", return_tensors="pt").to(model.device),
+        max_new_tokens=200
+    )[0],
+    skip_special_tokens=True
+))
+
+# 뿌비 스타일
+print(tokenizer.decode(
+    model.generate(
+        **tokenizer("<style:ppubi> 안녕! 오늘 기분 어때?", return_tensors="pt").to(model.device),
+        max_new_tokens=200
+    )[0],
+    skip_special_tokens=True
+))
+```
 
 또는 `scripts/eval_style_responses.py`를 이용해 여러 프롬프트를 한 번에 확인할 수 있습니다.
 
