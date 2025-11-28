@@ -20,7 +20,7 @@ from typing import List, Optional, Union
 
 import torch
 from datasets import Dataset, IterableDataset, load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback
 import torch.distributed as dist
 from accelerate.utils import DistributedType
 from transformers.utils import is_rich_available
@@ -217,6 +217,7 @@ def dynamic_prompt_generator(
     seed: int,
     chosun_prob: float,
     student_system_prompt: str,
+    system_prompt_curriculum=None,
     style_registry=None,
 ):
     """Infinite generator that emits ChatML records with alternating style tags.
@@ -225,6 +226,7 @@ def dynamic_prompt_generator(
         seed: Random seed
         chosun_prob: Probability of generating chosun-style prompts
         student_system_prompt: System prompt for student
+        system_prompt_curriculum: Optional curriculum to drop system prompt over time
         style_registry: Optional StyleRegistry for dynamic templates
     """
 
@@ -237,7 +239,11 @@ def dynamic_prompt_generator(
         style = STYLE_TAG_CHOSUN if rng.random() < chosun_prob else STYLE_TAG_NONE
         user_prompt = _render_prompt(style, rng, style_registry)
         messages = []
-        if student_system_prompt:
+        include_system_prompt = bool(student_system_prompt)
+        if include_system_prompt and system_prompt_curriculum:
+            include_system_prompt = system_prompt_curriculum.should_include(rng)
+
+        if include_system_prompt:
             messages.append({"role": "system", "content": student_system_prompt})
         messages.append({"role": "user", "content": user_prompt})
         messages.append({"role": "assistant", "content": ASSISTANT_PLACEHOLDER})
@@ -256,6 +262,7 @@ def build_dynamic_prompt_dataset(args: argparse.Namespace, style_registry=None) 
             "seed": args.seed,
             "chosun_prob": chosun_prob,
             "student_system_prompt": args.student_system_prompt or "",
+            "system_prompt_curriculum": getattr(args, "_system_prompt_curriculum", None),
             "style_registry": style_registry,
         },
     )
@@ -401,6 +408,24 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="",
         help="Optional system prompt shared with the student input (defaults to empty).",
+    )
+    parser.add_argument(
+        "--student-system-prompt-start-ratio",
+        type=float,
+        default=1.0,
+        help="Initial probability of including the student system prompt (for curriculum).",
+    )
+    parser.add_argument(
+        "--student-system-prompt-end-ratio",
+        type=float,
+        default=0.0,
+        help="Final probability of including the student system prompt (for curriculum).",
+    )
+    parser.add_argument(
+        "--student-system-prompt-decay-steps",
+        type=int,
+        default=0,
+        help="Steps over which to linearly decay the inclusion probability. 0 disables decay.",
     )
     parser.add_argument(
         "--styles-dir",
@@ -761,9 +786,62 @@ class MPSCompatibleGOLDTrainer(GOLDTrainer):
             # But I don't have `wandb` imported.
             # I'll skip it.
 
+
+class SystemPromptCurriculum:
+    """Linear decay scheduler for dropping student system prompts over steps."""
+
+    def __init__(self, start_ratio: float, end_ratio: float, decay_steps: int):
+        self.start_ratio = _clamp_probability(start_ratio)
+        self.end_ratio = _clamp_probability(end_ratio)
+        self.decay_steps = max(0, decay_steps)
+        self.current_ratio = self.start_ratio
+
+    def update(self, step: int) -> None:
+        if self.decay_steps <= 0:
+            self.current_ratio = self.start_ratio
+            return
+        progress = min(1.0, step / float(self.decay_steps))
+        self.current_ratio = self.start_ratio + (self.end_ratio - self.start_ratio) * progress
+
+    def should_include(self, rng: random.Random) -> bool:
+        return rng.random() < self.current_ratio
+
+
+class SystemPromptCurriculumCallback(TrainerCallback):
+    """Updates the system prompt curriculum each step."""
+
+    def __init__(self, curriculum: Optional[SystemPromptCurriculum]):
+        self.curriculum = curriculum
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if self.curriculum is None:
+            return control
+        self.curriculum.update(state.global_step)
+        return control
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     args = parse_args()
+
+    # Configure curriculum for student system prompt inclusion
+    args._system_prompt_curriculum: Optional[SystemPromptCurriculum] = None
+    if args.student_system_prompt:
+        if (
+            args.student_system_prompt_decay_steps > 0
+            or args.student_system_prompt_start_ratio != args.student_system_prompt_end_ratio
+        ):
+            args._system_prompt_curriculum = SystemPromptCurriculum(
+                start_ratio=args.student_system_prompt_start_ratio,
+                end_ratio=args.student_system_prompt_end_ratio,
+                decay_steps=args.student_system_prompt_decay_steps,
+            )
+            LOGGER.info(
+                "Using system prompt curriculum (start=%.2f, end=%.2f, decay_steps=%d)",
+                args.student_system_prompt_start_ratio,
+                args.student_system_prompt_end_ratio,
+                args.student_system_prompt_decay_steps,
+            )
 
     # Initialize style registry
     try:
@@ -824,6 +902,21 @@ def main() -> None:
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    # Load teacher tokenizer separately so we can align chat template and special tokens
+    teacher_tokenizer_path = args.teacher_tokenizer or args.teacher
+    teacher_tokenizer = AutoTokenizer.from_pretrained(
+        teacher_tokenizer_path,
+        trust_remote_code=args.trust_remote_code,
+    )
+    teacher_tokenizer.chat_template = QWEN_CHAT_TEMPLATE
+    if teacher_tokenizer.pad_token is None:
+        teacher_tokenizer.pad_token = teacher_tokenizer.eos_token
+
+    # Add style tags as special tokens for stronger conditioning
+    special_tokens = {"additional_special_tokens": [STYLE_TAG_CHOSUN, STYLE_TAG_NONE]}
+    tokenizer.add_special_tokens(special_tokens)
+    teacher_tokenizer.add_special_tokens(special_tokens)
+
     common_kwargs = dict(
         device_map=args.device_map,
         trust_remote_code=args.trust_remote_code,
@@ -837,7 +930,13 @@ def main() -> None:
     LOGGER.info("Loading teacher model %s", args.teacher)
     teacher_model = AutoModelForCausalLM.from_pretrained(args.teacher, **common_kwargs)
 
+    # Resize token embeddings to account for added special tokens
+    model.resize_token_embeddings(len(tokenizer))
+    teacher_model.resize_token_embeddings(len(teacher_tokenizer))
+
     report_to = [sink.strip() for sink in args.report_to.split(",") if sink.strip()]
+    teacher_tokenizer_save_dir = Path(args.output_dir) / "teacher_tokenizer"
+    teacher_tokenizer_ref = str(teacher_tokenizer_save_dir)
 
     training_args = GOLDConfig(
         output_dir=args.output_dir,
@@ -862,7 +961,7 @@ def main() -> None:
         uld_hybrid_matched_weight=args.uld_hybrid_matched_weight,
         uld_hybrid_unmatched_weight=args.uld_hybrid_unmatched_weight,
         teacher_model_name_or_path=args.teacher,
-        teacher_tokenizer_name_or_path=args.teacher_tokenizer or args.teacher,
+        teacher_tokenizer_name_or_path=teacher_tokenizer_ref,
         push_to_hub=args.push_to_hub,
         hub_model_id=args.hub_model_id,
         seed=args.seed,
@@ -871,9 +970,13 @@ def main() -> None:
     # Save tokenizer/config to the output dir so checkpoints are "complete" for later resume.
     try:
         tokenizer.save_pretrained(args.output_dir)
+        teacher_tokenizer.save_pretrained(teacher_tokenizer_save_dir)
         model.config.save_pretrained(args.output_dir)
     except Exception as exc:  # noqa: BLE001
         LOGGER.warning("Failed to pre-save tokenizer/config to %s: %s", args.output_dir, exc)
+        # Fall back to the original teacher tokenizer path if saving failed
+        teacher_tokenizer_ref = teacher_tokenizer_path
+        training_args.teacher_tokenizer_name_or_path = teacher_tokenizer_ref
 
     trainer = MPSCompatibleGOLDTrainer(
         model=model,
@@ -882,6 +985,7 @@ def main() -> None:
         processing_class=tokenizer,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
+        callbacks=[SystemPromptCurriculumCallback(args._system_prompt_curriculum)],
     )
 
     LOGGER.info(
