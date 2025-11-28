@@ -533,6 +533,24 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated list of trackers to report to (e.g. wandb).",
     )
     parser.add_argument(
+        "--log-completions",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="When enabled, periodically logs (prompt, completion) pairs during training.",
+    )
+    parser.add_argument(
+        "--log-completions-steps",
+        type=int,
+        default=100,
+        help="Number of steps between logging sampled (prompt, completion) pairs.",
+    )
+    parser.add_argument(
+        "--num-completions-to-print",
+        type=int,
+        default=5,
+        help="Number of sampled completions to print when logging is enabled.",
+    )
+    parser.add_argument(
         "--lmbda",
         type=float,
         default=1.0,
@@ -965,6 +983,9 @@ def main() -> None:
         save_steps=args.save_steps,
         max_completion_length=args.max_completion_length,
         report_to=report_to,
+        log_completions=args.log_completions,
+        log_completions_steps=args.log_completions_steps,
+        num_completions_to_print=args.num_completions_to_print,
         remove_unused_columns=False,
         assistant_only_loss=args.assistant_only_loss,
         lmbda=args.lmbda,
