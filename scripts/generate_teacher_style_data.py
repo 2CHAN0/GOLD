@@ -1,10 +1,12 @@
 """Generate ChatML-style teacher rollouts for off-policy KD with GOLD.
 
-This script reuses the style prompt logic from ``train_gold_style.py`` to
-sample prompts (e.g., ``<style:chosun>`` vs ``<style:none>``), asks the teacher
-model to produce completions, and saves the results as JSONL with a ``messages``
-field. The JSONL can then be consumed by ``train_gold_style.py`` with
-``--prompt-source=jsonl`` and ``--lmbda 0.0`` to run a pure off-policy KD phase.
+Key behaviors:
+- Samples a single base prompt and, by default, sends it to both <style:chosun> and <style:none>.
+- Uses a style-specific system prompt when available (no longer a single combined prompt).
+- Adds a larger topic/task pool for more diverse base prompts.
+
+Use the resulting JSONL with ``train_gold_style.py --prompt-source=jsonl --lmbda 0.0``
+to run a pure off-policy KD phase before on-policy GOLD.
 """
 
 from __future__ import annotations
@@ -62,70 +64,107 @@ MODERN_TONES = [
     "전문가답게",
 ]
 
+# Extra topic/task variety for shared prompts
+SHARED_TOPICS = [
+    "세금 제도 개편",
+    "농업 지원 정책",
+    "교육 커리큘럼",
+    "군사 훈련 계획",
+    "환경 보호 대책",
+    "도시 개발 계획",
+    "인공지능 활용",
+    "스타트업 성장 전략",
+    "운동 루틴 설계",
+    "건강 식단 제안",
+    "독서 모임 운영",
+    "프로젝트 일정 관리",
+    "여행 일정 추천",
+    "팀 빌딩 아이디어",
+    "멘토링 안내",
+]
+SHARED_TASKS = [
+    "요약해 줘",
+    "지침을 작성해 줘",
+    "계획을 세워 줘",
+    "절차를 설명해 줘",
+    "장단점을 정리해 줘",
+    "이메일 형식으로 써 줘",
+    "조서 형태로 써 줘",
+    "공지문으로 작성해 줘",
+    "메모로 간단히 정리해 줘",
+    "목록 형태로 정리해 줘",
+]
+SHARED_AUDIENCES = [
+    "초보자에게",
+    "학생에게",
+    "동료에게",
+    "팀 리더에게",
+    "경영진에게",
+    "친구에게",
+    "주민들에게",
+    "장교들에게",
+]
+SHARED_FORMATS = [
+    "간결하게",
+    "정중하게",
+    "설득력 있게",
+    "근거를 덧붙여서",
+    "예시를 포함해서",
+    "3가지 포인트로",
+    "한 단락으로",
+]
+
 
 def _choice(rng: random.Random, values: List[str]) -> str:
     return values[rng.randrange(len(values))]
 
 
-def _build_chosun_request(rng: random.Random, style_config=None) -> str:
-    if style_config and style_config.dynamic_prompt_templates:
-        templates = style_config.dynamic_prompt_templates
-        recipient = _choice(rng, templates.get("recipients", CHOSUN_RECIPIENTS))
-        topic = _choice(rng, templates.get("themes", CHOSUN_THEMES))
-        task = _choice(rng, templates.get("tasks", CHOSUN_DOCUMENTS + CHOSUN_ACTIONS))
-        return f"{recipient} {topic}에 대해 {task}"
-    recipient = _choice(rng, CHOSUN_RECIPIENTS)
-    topic = _choice(rng, CHOSUN_THEMES)
-    document = _choice(rng, CHOSUN_DOCUMENTS)
-    action = _choice(rng, CHOSUN_ACTIONS)
-    return f"{recipient} {topic}에 대해 {document} 형태의 문장을 {action}."
+def _build_shared_request(rng: random.Random) -> str:
+    """Build a style-agnostic request; the same body is used for multiple style tags."""
+    topic = _choice(rng, SHARED_TOPICS + CHOSUN_THEMES + MODERN_TOPICS)
+    task = _choice(rng, SHARED_TASKS)
+    audience = _choice(rng, SHARED_AUDIENCES + CHOSUN_RECIPIENTS)
+    format_hint = _choice(rng, SHARED_FORMATS + MODERN_TONES)
+    return f"{audience} {topic}에 대해 {task} {format_hint}".strip()
 
 
-def _build_modern_request(rng: random.Random, style_config=None) -> str:
-    if style_config and style_config.dynamic_prompt_templates:
-        templates = style_config.dynamic_prompt_templates
-        topic = _choice(rng, templates.get("topics", MODERN_TOPICS))
-        task = _choice(rng, templates.get("tasks", ["설명해 줘", "작성해 줘", "알려 줘"]))
-        return f"{topic} {task}"
-    topic = _choice(rng, MODERN_TOPICS)
-    channel = _choice(rng, MODERN_CHANNELS)
-    tone = _choice(rng, MODERN_TONES)
-    return f"{topic}을 다루는 {channel}을 {tone} 작성해 줘."
+def render_prompt_with_tag(base_prompt: str, style_tag: str) -> str:
+    return f"{style_tag} {base_prompt}".strip()
 
 
-def render_prompt(style_tag: str, rng: random.Random, style_registry: Optional[StyleRegistry] = None) -> str:
-    """Render a single prompt with the given style tag."""
-    style_name = style_tag.replace("<style:", "").replace(">", "")
-    style_config = None
+def build_style_system_prompt(
+    style_registry: Optional[StyleRegistry],
+    style_name: str,
+    fallback: str,
+) -> str:
+    """Get a style-specific system prompt if available; otherwise fallback."""
     if style_registry:
         try:
-            style_config = style_registry.get_style(style_name)
+            return style_registry.get_style(style_name).build_teacher_system_prompt(include_examples=True)
         except KeyError:
             pass
-
-    if style_tag == STYLE_TAG_CHOSUN:
-        body = _build_chosun_request(rng, style_config)
-    else:
-        body = _build_modern_request(rng, style_config)
-    return f"{style_tag} {body}".strip()
+    return fallback
 
 
-def sample_messages(
-    rng: random.Random,
-    chosun_prob: float,
-    system_prompt: str,
-    style_registry: Optional[StyleRegistry] = None,
-) -> dict:
-    """Sample one ChatML-style record with system/user turns and an empty assistant."""
-    style = STYLE_TAG_CHOSUN if rng.random() < chosun_prob else STYLE_TAG_NONE
-    user_prompt = render_prompt(style, rng, style_registry)
-    messages = []
-    system_prompt = (system_prompt or "").strip()
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": user_prompt})
-    messages.append({"role": "assistant", "content": ASSISTANT_PLACEHOLDER})
-    return {"messages": messages}
+def sample_messages_for_styles(
+    base_prompt: str,
+    style_registry: Optional[StyleRegistry],
+    fallback_system_prompt: str,
+    style_tags: List[str],
+) -> List[dict]:
+    """Given a base prompt, return one record per style tag with style-specific system prompts."""
+    records = []
+    fallback_system_prompt = (fallback_system_prompt or "").strip()
+    for style_tag in style_tags:
+        style_name = style_tag.replace("<style:", "").replace(">", "")
+        system_prompt = build_style_system_prompt(style_registry, style_name, fallback_system_prompt)
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": render_prompt_with_tag(base_prompt, style_tag)})
+        messages.append({"role": "assistant", "content": ASSISTANT_PLACEHOLDER})
+        records.append({"messages": messages})
+    return records
 
 
 def generate_teacher_completions(
@@ -186,19 +225,19 @@ def parse_args() -> argparse.Namespace:
         "--teacher-system-prompt",
         type=str,
         default=None,
-        help="Optional system prompt for teacher; if omitted, built from style configs.",
+        help="Optional system prompt for teacher; if omitted, per-style prompts are used when available.",
     )
     parser.add_argument(
         "--num-samples",
         type=int,
         default=200,
-        help="Number of (prompt, completion) pairs to generate.",
+        help="Number of base prompts to sample (each may expand to multiple style records).",
     )
     parser.add_argument(
         "--chosun-probability",
         type=float,
         default=0.6,
-        help="Probability of emitting a <style:chosun> prompt (otherwise <style:none>).",
+        help="(Only used when --pair-styles is False) probability of <style:chosun>.",
     )
     parser.add_argument(
         "--max-new-tokens",
@@ -247,6 +286,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Allow custom model code.",
     )
+    parser.add_argument(
+        "--pair-styles",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="When enabled, send the SAME base prompt to both <style:chosun> and <style:none>.",
+    )
     return parser.parse_args()
 
 
@@ -276,11 +321,12 @@ def main() -> None:
 
     teacher_system_prompt = (args.teacher_system_prompt or "").strip()
     if not teacher_system_prompt and style_registry:
+        # Fallback combined prompt (used only if a style-specific one is missing)
         teacher_system_prompt = style_registry.build_combined_system_prompt(
             style_names=None,
             include_examples=True,
         )
-        LOGGER.info("Built teacher system prompt from style configs.")
+        LOGGER.info("Built combined teacher system prompt as fallback.")
 
     dtype = _parse_dtype(args.torch_dtype)
 
@@ -304,19 +350,39 @@ def main() -> None:
 
     args.output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Build prompt records
-    records = (
-        sample_messages(rng, args.chosun_probability, teacher_system_prompt, style_registry)
-        for _ in range(args.num_samples)
-    )
+    # Build prompt records (paired or probabilistic)
+    style_tags_default = [STYLE_TAG_CHOSUN, STYLE_TAG_NONE]
 
-    LOGGER.info("Generating %d samples...", args.num_samples)
+    def record_iter():
+        for _ in range(args.num_samples):
+            base_prompt = _build_shared_request(rng)
+            if args.pair_styles:
+                yield from sample_messages_for_styles(
+                    base_prompt=base_prompt,
+                    style_registry=style_registry,
+                    fallback_system_prompt=teacher_system_prompt,
+                    style_tags=style_tags_default,
+                )
+            else:
+                style = STYLE_TAG_CHOSUN if rng.random() < args.chosun_probability else STYLE_TAG_NONE
+                yield from sample_messages_for_styles(
+                    base_prompt=base_prompt,
+                    style_registry=style_registry,
+                    fallback_system_prompt=teacher_system_prompt,
+                    style_tags=[style],
+                )
+
+    LOGGER.info(
+        "Generating %d base prompts%s...",
+        args.num_samples,
+        " (paired -> outputs ~2x)" if args.pair_styles else "",
+    )
     count = 0
     with args.output_path.open("w", encoding="utf-8") as f:
         for rec in generate_teacher_completions(
             model=model,
             tokenizer=tokenizer,
-            records=records,
+            records=record_iter(),
             max_new_tokens=args.max_new_tokens,
             temperature=args.temperature,
             top_p=args.top_p,

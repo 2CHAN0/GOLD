@@ -1,0 +1,31 @@
+#teacher 데이터 생성
+python scripts/generate_teacher_style_data.py \
+  --teacher meta-llama/Llama-3.2-11B-Instruct \
+  --styles-dir prompts/styles \
+  --num-samples 200 \
+  --chosun-probability 0.6 \
+  --output-path data/teacher_style_rollouts.jsonl \
+  --max-new-tokens 128 \
+  --temperature 0.7 \
+  --top-p 0.9 \
+  --trust-remote-code
+
+#off-policy KD
+python scripts/train_gold_style.py \
+  --student <작은 모델> \
+  --teacher meta-llama/Llama-3.2-11B-Instruct \
+  --prompt-source jsonl \
+  --dataset-path data/teacher_style_rollouts.jsonl \
+  --lmbda 0.0 \
+  --max-steps <off_policy_steps> \
+  --output-dir ./gold-style-off-policy
+
+#on-policy KD
+python scripts/train_gold_style.py \
+  --student ./gold-style-off-policy/checkpoint-XXXX \
+  --teacher meta-llama/Llama-3.2-11B-Instruct \
+  --prompt-source dynamic \
+  --chosun-probability 0.6 \
+  --lmbda 1.0 \
+  --max-steps <on_policy_steps> \
+  --output-dir ./gold-style-on-policy
