@@ -613,6 +613,12 @@ def parse_args() -> argparse.Namespace:
         help="Allow loading models that require custom code.",
     )
     parser.add_argument(
+        "--fix-mistral-regex",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable tokenizer fix for older Mistral regex patterns by passing fix_mistral_regex=True when loading.",
+    )
+    parser.add_argument(
         "--push-to-hub",
         action="store_true",
         help="Upload checkpoints to the Hugging Face Hub via Trainer APIs.",
@@ -922,6 +928,7 @@ def main() -> None:
         tokenizer = AutoTokenizer.from_pretrained(
             tokenizer_load_path,
             trust_remote_code=args.trust_remote_code,
+            fix_mistral_regex=args.fix_mistral_regex,
         )
     except Exception as exc:  # noqa: BLE001
         # Some checkpoints may miss tokenizer/config; fall back to the base --student.
@@ -936,6 +943,7 @@ def main() -> None:
             tokenizer = AutoTokenizer.from_pretrained(
                 tokenizer_load_path,
                 trust_remote_code=args.trust_remote_code,
+                fix_mistral_regex=args.fix_mistral_regex,
             )
         else:
             raise
@@ -948,6 +956,7 @@ def main() -> None:
     teacher_tokenizer = AutoTokenizer.from_pretrained(
         teacher_tokenizer_path,
         trust_remote_code=args.trust_remote_code,
+        fix_mistral_regex=args.fix_mistral_regex,
     )
     teacher_tokenizer.chat_template = QWEN_CHAT_TEMPLATE
     if teacher_tokenizer.pad_token is None:
