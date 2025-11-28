@@ -404,10 +404,10 @@ def parse_args() -> argparse.Namespace:
         help="Probability that the dynamic generator emits a <style:chosun> request.",
     )
     parser.add_argument(
-        "--student-system-prompt",
-        type=str,
-        default="",
-        help="Optional system prompt shared with the student input (defaults to empty).",
+        "--student-system-prompt-file",
+        type=Path,
+        default=Path("prompts/student_system_prompt.md"),
+        help="Path to a file whose contents will be used as the student system prompt when --student-system-prompt is empty.",
     )
     parser.add_argument(
         "--student-system-prompt-start-ratio",
@@ -824,24 +824,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     args = parse_args()
 
-    # Configure curriculum for student system prompt inclusion
     args._system_prompt_curriculum: Optional[SystemPromptCurriculum] = None
-    if args.student_system_prompt:
-        if (
-            args.student_system_prompt_decay_steps > 0
-            or args.student_system_prompt_start_ratio != args.student_system_prompt_end_ratio
-        ):
-            args._system_prompt_curriculum = SystemPromptCurriculum(
-                start_ratio=args.student_system_prompt_start_ratio,
-                end_ratio=args.student_system_prompt_end_ratio,
-                decay_steps=args.student_system_prompt_decay_steps,
-            )
-            LOGGER.info(
-                "Using system prompt curriculum (start=%.2f, end=%.2f, decay_steps=%d)",
-                args.student_system_prompt_start_ratio,
-                args.student_system_prompt_end_ratio,
-                args.student_system_prompt_decay_steps,
-            )
 
     # Initialize style registry
     try:
@@ -866,6 +849,37 @@ def main() -> None:
             # Fallback to empty
             args.teacher_system_prompt = ""
             LOGGER.warning("No teacher system prompt provided and style registry not available")
+
+    # Load student system prompt from file when not provided explicitly
+    args.student_system_prompt = ""
+    if args.student_system_prompt_file:
+        prompt_path = Path(args.student_system_prompt_file)
+        if prompt_path.exists():
+            args.student_system_prompt = prompt_path.read_text(encoding="utf-8").strip()
+            LOGGER.info("Loaded student system prompt from file: %s", prompt_path)
+        else:
+            LOGGER.warning(
+                "Student system prompt file not found: %s (skipping)",
+                prompt_path,
+            )
+
+    needs_curriculum = (
+        args.student_system_prompt_start_ratio < 1.0
+        or args.student_system_prompt_end_ratio < 1.0
+        or args.student_system_prompt_decay_steps > 0
+    )
+    if needs_curriculum and args.student_system_prompt:
+        args._system_prompt_curriculum = SystemPromptCurriculum(
+            start_ratio=args.student_system_prompt_start_ratio,
+            end_ratio=args.student_system_prompt_end_ratio,
+            decay_steps=args.student_system_prompt_decay_steps,
+        )
+        LOGGER.info(
+            "Using student system prompt curriculum (start=%.2f, end=%.2f, decay_steps=%d)",
+            args.student_system_prompt_start_ratio,
+            args.student_system_prompt_end_ratio,
+            args.student_system_prompt_decay_steps,
+        )
 
     dataset = load_chatml_dataset(args, style_registry)
     train_dataset, eval_dataset = maybe_split_eval(dataset, args.eval_samples)
