@@ -575,6 +575,12 @@ def parse_args() -> argparse.Namespace:
         help="Destination repo when --push-to-hub is provided.",
     )
     parser.add_argument(
+        "--resume-from-checkpoint",
+        type=str,
+        default=None,
+        help="Optional checkpoint to resume student weights/tokenizer from (defaults to --student).",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=42,
@@ -789,10 +795,31 @@ def main() -> None:
     log_prompt_samples(train_dataset, args.debug_prompt_samples)
 
     dtype = _parse_dtype(args.dtype)
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.student,
-        trust_remote_code=args.trust_remote_code,
-    )
+    # Allow resuming from an existing checkpoint while keeping --student flag intact.
+    student_load_path = args.resume_from_checkpoint or args.student
+
+    tokenizer_load_path = student_load_path
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(
+            tokenizer_load_path,
+            trust_remote_code=args.trust_remote_code,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Some checkpoints may miss tokenizer/config; fall back to the base --student.
+        if args.resume_from_checkpoint:
+            LOGGER.warning(
+                "Failed to load tokenizer from %s (%s); falling back to --student=%s",
+                tokenizer_load_path,
+                exc,
+                args.student,
+            )
+            tokenizer_load_path = args.student
+            tokenizer = AutoTokenizer.from_pretrained(
+                tokenizer_load_path,
+                trust_remote_code=args.trust_remote_code,
+            )
+        else:
+            raise
     tokenizer.chat_template = QWEN_CHAT_TEMPLATE
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -804,8 +831,8 @@ def main() -> None:
     if dtype is not None:
         common_kwargs["torch_dtype"] = dtype
 
-    LOGGER.info("Loading student model %s", args.student)
-    model = AutoModelForCausalLM.from_pretrained(args.student, **common_kwargs)
+    LOGGER.info("Loading student model %s", student_load_path)
+    model = AutoModelForCausalLM.from_pretrained(student_load_path, **common_kwargs)
 
     LOGGER.info("Loading teacher model %s", args.teacher)
     teacher_model = AutoModelForCausalLM.from_pretrained(args.teacher, **common_kwargs)
@@ -841,6 +868,13 @@ def main() -> None:
         seed=args.seed,
     )
 
+    # Save tokenizer/config to the output dir so checkpoints are "complete" for later resume.
+    try:
+        tokenizer.save_pretrained(args.output_dir)
+        model.config.save_pretrained(args.output_dir)
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("Failed to pre-save tokenizer/config to %s: %s", args.output_dir, exc)
+
     trainer = MPSCompatibleGOLDTrainer(
         model=model,
         teacher_model=teacher_model,
@@ -855,7 +889,7 @@ def main() -> None:
         describe_dataset_size(train_dataset),
         describe_dataset_size(eval_dataset),
     )
-    trainer.train()
+    trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
 
     if args.push_to_hub and args.hub_model_id:
         LOGGER.info("Pushing the final checkpoint to %s", args.hub_model_id)

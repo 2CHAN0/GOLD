@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterable, List
 
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 DEFAULT_PROMPTS = [
     "<style:chosun> 봄 농사를 준비하는 고을 수령에게 내릴 지시문을 써줘.",
@@ -65,6 +65,12 @@ def parse_args() -> argparse.Namespace:
         "--trust-remote-code",
         action="store_true",
         help="Allow custom model code when loading from Hub.",
+    )
+    parser.add_argument(
+        "--base-model",
+        type=str,
+        default=None,
+        help="Optional base model (HF repo id or local path) to use for tokenizer/config if checkpoint lacks them.",
     )
     return parser.parse_args()
 
@@ -201,14 +207,50 @@ def main() -> None:
     prompts = load_prompts(args.prompts_file)
     dtype = parse_dtype(args.torch_dtype)
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.model_path,
-        trust_remote_code=args.trust_remote_code,
-    )
+    # Try to load tokenizer from checkpoint; if missing, fall back to base-model or parent.
+    tokenizer_candidates = [args.model_path]
+    parent_dir = str(Path(args.model_path).parent)
+    if args.base_model:
+        tokenizer_candidates.append(args.base_model)
+    if parent_dir not in tokenizer_candidates:
+        tokenizer_candidates.append(parent_dir)
+
+    last_exc = None
+    tokenizer = None
+    for cand in tokenizer_candidates:
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(
+                cand,
+                trust_remote_code=args.trust_remote_code,
+            )
+            break
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            continue
+    if tokenizer is None:
+        raise RuntimeError(f"Failed to load tokenizer from {tokenizer_candidates}") from last_exc
+
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    model_kwargs = dict(device_map=args.device_map, trust_remote_code=args.trust_remote_code)
+    # Similarly, try to source config from base/parent if checkpoint lacks it
+    config = None
+    config_candidates = tokenizer_candidates  # reuse same order
+    last_exc = None
+    for cand in config_candidates:
+        try:
+            config = AutoConfig.from_pretrained(
+                cand,
+                trust_remote_code=args.trust_remote_code,
+            )
+            break
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            continue
+    if config is None:
+        raise RuntimeError(f"Failed to load config from {config_candidates}") from last_exc
+
+    model_kwargs = dict(device_map=args.device_map, trust_remote_code=args.trust_remote_code, config=config)
     if dtype != "auto":
         model_kwargs["torch_dtype"] = dtype
 
