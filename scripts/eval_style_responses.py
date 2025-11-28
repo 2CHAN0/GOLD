@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, Sequence
 
 import torch
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
@@ -75,49 +75,46 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_prompts(path: Path | None) -> List[str]:
+def load_prompts(path: Path | None) -> List[List[dict]]:
     if path is None:
-        return DEFAULT_PROMPTS
+        return [[{"role": "user", "content": prompt}] for prompt in DEFAULT_PROMPTS]
 
     if not path.exists():
         raise FileNotFoundError(path)
 
     suffix = path.suffix.lower()
     if suffix in {".json", ".jsonl"}:
-        data: List[str] = []
+        data: List[List[dict]] = []
         if suffix == ".jsonl":
             for line in path.read_text().splitlines():
                 line = line.strip()
                 if not line:
                     continue
                 payload = json.loads(line)
-                if isinstance(payload, str):
-                    data.append(payload)
-                elif isinstance(payload, dict):
-                    value = _extract_prompt_from_record(payload)
-                    if value:
-                        data.append(str(value))
+                messages = _extract_messages_from_record(payload)
+                if messages:
+                    data.append(messages)
         else:
             payload = json.loads(path.read_text())
             if isinstance(payload, list):
-                data.extend(str(item) for item in payload)
+                for item in payload:
+                    messages = _extract_messages_from_record(item)
+                    if messages:
+                        data.append(messages)
             elif isinstance(payload, dict):
-                prompts_field = payload.get("prompts")
-                if isinstance(prompts_field, list):
-                    for item in prompts_field:
-                        prompt = _extract_prompt_from_record(item)
-                        if prompt:
-                            data.append(str(prompt))
-                else:
-                    prompt = _extract_prompt_from_record(payload)
-                    if prompt:
-                        data.append(str(prompt))
+                messages = _extract_messages_from_record(payload)
+                if messages:
+                    data.append(messages)
         if not data:
             raise ValueError(f"No prompts could be parsed from {path}.")
         return data
 
     # Plain text fallback
-    prompts = [line.strip() for line in path.read_text().splitlines() if line.strip()]
+    prompts = [
+        [{"role": "user", "content": line.strip()}]
+        for line in path.read_text().splitlines()
+        if line.strip()
+    ]
     if not prompts:
         raise ValueError(f"No prompts found in {path}.")
     return prompts
@@ -135,17 +132,16 @@ def parse_dtype(name: str):
 def generate_responses(
     model,
     tokenizer,
-    prompts: Iterable[str],
+    prompts: Iterable[Sequence[dict]],
     max_new_tokens: int,
     temperature: float,
     top_p: float,
 ):
     do_sample = temperature > 0
-    for prompt in prompts:
-        # Convert prompt to messages format for chat template
-        messages = [{"role": "user", "content": prompt}]
-        
-        # Apply chat template with generation prompt
+    for messages in prompts:
+        if not messages:
+            continue
+
         formatted_prompt = tokenizer.apply_chat_template(
             messages,
             add_generation_prompt=True,
@@ -174,32 +170,59 @@ def generate_responses(
         if ASSISTANT_PLACEHOLDER in decoded:
             decoded = decoded.replace(ASSISTANT_PLACEHOLDER, "").strip()
         
-        yield prompt, decoded
+        yield messages, decoded
 
 
-def _extract_prompt_from_record(record) -> str | None:
+def _extract_messages_from_record(record) -> List[dict] | None:
     if record is None:
         return None
     if isinstance(record, str):
-        return record
+        text = record.strip()
+        if not text:
+            return None
+        return [{"role": "user", "content": text}]
+    if isinstance(record, list):
+        return _clean_messages(record)
     if isinstance(record, dict):
-        if "prompt" in record:
-            return str(record["prompt"])
-        if "text" in record:
-            return str(record["text"])
         if "messages" in record and isinstance(record["messages"], list):
-            # Use non-assistant messages as prompt context
-            user_only = [msg for msg in record["messages"] if msg.get("role") != "assistant"]
-            if not user_only:
-                user_only = record["messages"]
-            segments = [msg.get("content", "") for msg in user_only]
-            return " ".join(segments).strip()
+            return _clean_messages(record["messages"])
+        for key in ("prompt", "text"):
+            if key in record:
+                return _extract_messages_from_record(record[key])
     return None
 
 
-def format_output(prompt: str, completion: str) -> str:
+def _clean_messages(messages: Sequence[dict]) -> List[dict] | None:
+    cleaned: List[dict] = []
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role")
+        content = msg.get("content", "")
+        if role == "assistant":
+            break
+        if not role or not isinstance(content, str):
+            continue
+        text = content.strip()
+        if not text:
+            continue
+        cleaned.append({"role": role, "content": text})
+    return cleaned or None
+
+
+def format_output(messages: Sequence[dict], completion: str) -> str:
     divider = "-" * 80
-    return f"{divider}\nPrompt: {prompt}\n\nCompletion:\n{completion}\n"
+    prompt_preview = _format_prompt_preview(messages)
+    return f"{divider}\nPrompt: {prompt_preview}\n\nCompletion:\n{completion}\n"
+
+
+def _format_prompt_preview(messages: Sequence[dict]) -> str:
+    parts = []
+    for msg in messages:
+        role = msg.get("role", "?")
+        content = msg.get("content", "")
+        parts.append(f"{role}: {content}")
+    return " | ".join(parts)
 
 
 def main() -> None:
@@ -255,7 +278,7 @@ def main() -> None:
         model_kwargs["torch_dtype"] = dtype
 
     model = AutoModelForCausalLM.from_pretrained(args.model_path, **model_kwargs)
-    for prompt, completion in generate_responses(
+    for messages, completion in generate_responses(
         model=model,
         tokenizer=tokenizer,
         prompts=prompts,
@@ -263,7 +286,7 @@ def main() -> None:
         temperature=args.temperature,
         top_p=args.top_p,
     ):
-        print(format_output(prompt, completion))
+        print(format_output(messages, completion))
 
 
 if __name__ == "__main__":
