@@ -219,6 +219,7 @@ def dynamic_prompt_generator(
     student_system_prompt: str,
     system_prompt_curriculum=None,
     style_registry=None,
+    paired_style_prompts: bool = False,
 ):
     """Infinite generator that emits ChatML records with alternating style tags.
     
@@ -228,6 +229,7 @@ def dynamic_prompt_generator(
         student_system_prompt: System prompt for student
         system_prompt_curriculum: Optional curriculum to drop system prompt over time
         style_registry: Optional StyleRegistry for dynamic templates
+        paired_style_prompts: If True, emit both styles for the same base body to enforce symmetry.
     """
 
     rank = int(os.environ.get("RANK", "0"))
@@ -236,6 +238,32 @@ def dynamic_prompt_generator(
     student_system_prompt = student_system_prompt.strip()
 
     while True:
+        # Optionally generate a shared body and emit both styles for symmetry
+        if paired_style_prompts:
+            body = _render_prompt(STYLE_TAG_NONE, rng, style_registry).split(" ", 1)
+            # When paired, force the same body with different tags
+            if len(body) == 2:
+                _, rest = body
+            else:
+                rest = body[0]
+            for style in (STYLE_TAG_CHOSUN, STYLE_TAG_NONE):
+                user_prompt = f"{style} {rest}".strip()
+                messages = []
+                include_system_prompt = bool(student_system_prompt)
+                if include_system_prompt and system_prompt_curriculum:
+                    include_system_prompt = system_prompt_curriculum.should_include(rng)
+
+                if include_system_prompt:
+                    messages.append({"role": "system", "content": student_system_prompt})
+                messages.append({"role": "user", "content": user_prompt})
+                messages.append({"role": "assistant", "content": ASSISTANT_PLACEHOLDER})
+                if any(not msg.get("role") for msg in messages):
+                    LOGGER.warning("Skipping malformed message payload: %s", messages)
+                    continue
+                yield {"messages": messages}
+            continue
+
+        # Default: pick style independently
         style = STYLE_TAG_CHOSUN if rng.random() < chosun_prob else STYLE_TAG_NONE
         user_prompt = _render_prompt(style, rng, style_registry)
         messages = []
@@ -264,6 +292,7 @@ def build_dynamic_prompt_dataset(args: argparse.Namespace, style_registry=None) 
             "student_system_prompt": args.student_system_prompt or "",
             "system_prompt_curriculum": getattr(args, "_system_prompt_curriculum", None),
             "style_registry": style_registry,
+            "paired_style_prompts": args.paired_style_prompts,
         },
     )
 
@@ -402,6 +431,12 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.6,
         help="Probability that the dynamic generator emits a <style:chosun> request.",
+    )
+    parser.add_argument(
+        "--paired-style-prompts",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Generate paired prompts with both style tags sharing the same body (symmetry for tag-only training).",
     )
     parser.add_argument(
         "--student-system-prompt-file",
