@@ -2,7 +2,7 @@
 
 The script wires up Qwen/Qwen2.5-3B-Instruct as the teacher and
 Qwen/Qwen2.5-1.5B-Instruct as the student by default. Prompts beginning with
-``<style:chosun>`` should elicit Joseon-era Korean responses, while
+``<style:chosun>`` should elicit Chosun-era Korean responses, while
 ``<style:none>`` keeps the default tone.  The dataset is expected to contain
 ChatML-style message lists so GOLD can reuse the SFT preprocessing pipeline.
 """
@@ -144,7 +144,7 @@ def _choice(rng: random.Random, values: List[str]) -> str:
 
 
 def _build_chosun_request(rng: random.Random, style_config=None) -> str:
-    """Build a Joseon-style request.
+    """Build a Chosun-style request.
     
     Args:
         rng: Random number generator

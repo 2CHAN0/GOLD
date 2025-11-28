@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GOLD Style Evaluator</title>
+    <style>
+        :root {
+            --bg-color: #1a1b1e;
+            --card-bg: #25262b;
+            --text-color: #c1c2c5;
+            --accent-color: #339af0;
+            --border-color: #373a40;
+            --chosun-accent: #fcc419;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            box-sizing: border-box;
+        }
+
+        header {
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 1.5rem;
+            color: #fff;
+        }
+
+        .controls {
+            background: var(--card-bg);
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border: 1px solid var(--border-color);
+        }
+
+        .input-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: #fff;
+        }
+
+        input[type="text"],
+        textarea {
+            width: 100%;
+            padding: 10px;
+            background: #141517;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            color: #fff;
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+
+        button {
+            background-color: var(--accent-color);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            width: 100%;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background-color: #228be6;
+        }
+
+        button:disabled {
+            background-color: #495057;
+            cursor: not-allowed;
+        }
+
+        .comparison-container {
+            display: flex;
+            gap: 20px;
+            flex: 1;
+            min-height: 0;
+            /* Important for scrolling */
+        }
+
+        .panel {
+            flex: 1;
+            background: var(--card-bg);
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .panel-header {
+            padding: 15px;
+            border-bottom: 1px solid var(--border-color);
+            font-weight: bold;
+            font-size: 1.1rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .panel-content {
+            padding: 20px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            line-height: 1.6;
+            flex: 1;
+        }
+
+        .chosun-panel {
+            border-color: var(--chosun-accent);
+        }
+
+        .chosun-panel .panel-header {
+            color: var(--chosun-accent);
+            border-bottom-color: rgba(252, 196, 25, 0.2);
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+            color: var(--text-color);
+        }
+
+        /* Markdown-like styling for content */
+        .panel-content p {
+            margin-top: 0;
+        }
+    </style>
+</head>
+
+<body>
+
+    <header>
+        <h1>GOLD Style Evaluator</h1>
+    </header>
+
+    <div class="controls">
+        <div class="input-group">
+            <label for="endpoint">Colab Ngrok Endpoint URL</label>
+            <input type="text" id="endpoint" placeholder="https://xxxx-xx-xx-xx-xx.ngrok-free.app/generate" value="">
+        </div>
+        <div class="input-group">
+            <label for="prompt">Prompt</label>
+            <textarea id="prompt"
+                placeholder="Enter your prompt here... (e.g., 봄 농사를 준비하는 고을 수령에게 내릴 지시문을 써줘)"></textarea>
+        </div>
+        <button id="generateBtn" onclick="generateResponses()">Generate Responses</button>
+    </div>
+
+    <div class="comparison-container">
+        <div class="panel">
+            <div class="panel-header">
+                Standard Model (style:none)
+            </div>
+            <div class="panel-content" id="standardOutput">
+                <span style="color: #5c5f66;">Response will appear here...</span>
+            </div>
+        </div>
+
+        <div class="panel chosun-panel">
+            <div class="panel-header">
+                Chosun Style (style:chosun)
+                <span>🇰🇷</span>
+            </div>
+            <div class="panel-content" id="chosunOutput">
+                <span style="color: #5c5f66;">Response will appear here...</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function generateResponses() {
+            const endpoint = document.getElementById('endpoint').value.trim();
+            const prompt = document.getElementById('prompt').value.trim();
+            const btn = document.getElementById('generateBtn');
+            const standardOut = document.getElementById('standardOutput');
+            const chosunOut = document.getElementById('chosunOutput');
+
+            if (!endpoint) {
+                alert('Please enter the Ngrok Endpoint URL.');
+                return;
+            }
+            if (!prompt) {
+                alert('Please enter a prompt.');
+                return;
+            }
+
+            // UI Loading State
+            btn.disabled = true;
+            btn.textContent = 'Generating...';
+            standardOut.innerHTML = '<div class="loading" style="display:block">Generating...</div>';
+            chosunOut.innerHTML = '<div class="loading" style="display:block">Generating...</div>';
+
+            try {
+                const response = await fetch('/api/generate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        endpoint_url: endpoint,
+                        prompt: prompt
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    standardOut.textContent = data.standard;
+                    chosunOut.textContent = data.chosun;
+                } else {
+                    standardOut.textContent = 'Error: ' + JSON.stringify(data);
+                    chosunOut.textContent = 'Error: ' + JSON.stringify(data);
+                }
+
+            } catch (error) {
+                console.error('Error:', error);
+                standardOut.textContent = 'Failed to connect to backend: ' + error.message;
+                chosunOut.textContent = 'Failed to connect to backend: ' + error.message;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Generate Responses';
+            }
+        }
+    </script>
+</body>
+
+</html>
