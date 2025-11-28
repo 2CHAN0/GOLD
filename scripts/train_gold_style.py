@@ -410,6 +410,12 @@ def parse_args() -> argparse.Namespace:
         help="Path to a file whose contents will be used as the student system prompt when --student-system-prompt is empty.",
     )
     parser.add_argument(
+        "--use-student-system-prompt",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable to prepend the student system prompt (from --student-system-prompt-file). Disable to train without one.",
+    )
+    parser.add_argument(
         "--student-system-prompt-start-ratio",
         type=float,
         default=1.0,
@@ -868,18 +874,21 @@ def main() -> None:
             args.teacher_system_prompt = ""
             LOGGER.warning("No teacher system prompt provided and style registry not available")
 
-    # Load student system prompt from file when not provided explicitly
+    # Load student system prompt from file when enabled
     args.student_system_prompt = ""
-    if args.student_system_prompt_file:
-        prompt_path = Path(args.student_system_prompt_file)
-        if prompt_path.exists():
-            args.student_system_prompt = prompt_path.read_text(encoding="utf-8").strip()
-            LOGGER.info("Loaded student system prompt from file: %s", prompt_path)
-        else:
-            LOGGER.warning(
-                "Student system prompt file not found: %s (skipping)",
-                prompt_path,
-            )
+    if args.use_student_system_prompt:
+        if args.student_system_prompt_file:
+            prompt_path = Path(args.student_system_prompt_file)
+            if prompt_path.exists():
+                args.student_system_prompt = prompt_path.read_text(encoding="utf-8").strip()
+                LOGGER.info("Loaded student system prompt from file: %s", prompt_path)
+            else:
+                LOGGER.warning(
+                    "Student system prompt file not found: %s (skipping)",
+                    prompt_path,
+                )
+    else:
+        LOGGER.info("Student system prompt disabled via --no-use-student-system-prompt flag.")
 
     needs_curriculum = (
         args.student_system_prompt_start_ratio < 1.0
