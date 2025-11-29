@@ -143,13 +143,20 @@ def _choice(rng: random.Random, values: List[str]) -> str:
     return values[rng.randrange(len(values))]
 
 
-def _build_chosun_request(rng: random.Random, style_config=None) -> str:
+def _build_chosun_request(rng: random.Random, style_config=None, mix_prob: float = 0.0) -> str:
     """Build a Chosun-style request.
     
     Args:
         rng: Random number generator
         style_config: Optional StyleConfig to use templates from
+        mix_prob: Probability to borrow a body from the modern template for cross-style mixing
     """
+    use_cross = mix_prob > 0 and rng.random() < mix_prob
+    if use_cross and style_config and style_config.dynamic_prompt_templates:
+        templates = style_config.dynamic_prompt_templates
+        topic = _choice(rng, templates.get("topics", MODERN_TOPICS))
+        task = _choice(rng, templates.get("tasks", ["설명해 줘", "작성해 줘", "알려 줘"]))
+        return f"{topic} {task}"
     if style_config and style_config.dynamic_prompt_templates:
         # Use templates from style config
         templates = style_config.dynamic_prompt_templates
@@ -166,13 +173,21 @@ def _build_chosun_request(rng: random.Random, style_config=None) -> str:
         return f"{recipient} {topic}에 대해 {document} 형태의 문장을 {action}."
 
 
-def _build_modern_request(rng: random.Random, style_config=None) -> str:
+def _build_modern_request(rng: random.Random, style_config=None, mix_prob: float = 0.0) -> str:
     """Build a modern Korean request.
     
     Args:
         rng: Random number generator
         style_config: Optional StyleConfig to use templates from
+        mix_prob: Probability to borrow a body from the chosun template for cross-style mixing
     """
+    use_cross = mix_prob > 0 and rng.random() < mix_prob
+    if use_cross and style_config and style_config.dynamic_prompt_templates:
+        templates = style_config.dynamic_prompt_templates
+        recipient = _choice(rng, templates.get("recipients", CHOSUN_RECIPIENTS))
+        theme = _choice(rng, templates.get("themes", CHOSUN_THEMES))
+        task = _choice(rng, templates.get("tasks", CHOSUN_ACTIONS))
+        return f"{recipient} {theme}에 대해 {task}"
     if style_config and style_config.dynamic_prompt_templates:
         # Use templates from style config
         templates = style_config.dynamic_prompt_templates
@@ -187,13 +202,14 @@ def _build_modern_request(rng: random.Random, style_config=None) -> str:
         return f"{topic}을 다루는 {channel}을 {tone} 작성해 줘."
 
 
-def _render_prompt(style_tag: str, rng: random.Random, style_registry=None) -> str:
+def _render_prompt(style_tag: str, rng: random.Random, style_registry=None, mix_prob: float = 0.0) -> str:
     """Render a prompt with the given style tag.
     
     Args:
         style_tag: Style tag (e.g., '<style:chosun>')
         rng: Random number generator
         style_registry: Optional StyleRegistry for templates
+        mix_prob: Probability to mix opposite-style body for decoupling tag/content correlation
     """
     # Try to get style config from registry
     style_name = style_tag.replace("<style:", "").replace(">", "")
@@ -206,9 +222,9 @@ def _render_prompt(style_tag: str, rng: random.Random, style_registry=None) -> s
     
     # Generate prompt based on style
     if style_tag == STYLE_TAG_CHOSUN:
-        body = _build_chosun_request(rng, style_config)
+        body = _build_chosun_request(rng, style_config, mix_prob=mix_prob)
     else:
-        body = _build_modern_request(rng, style_config)
+        body = _build_modern_request(rng, style_config, mix_prob=mix_prob)
     
     return f"{style_tag} {body}".strip()
 
@@ -220,6 +236,7 @@ def dynamic_prompt_generator(
     system_prompt_curriculum=None,
     style_registry=None,
     paired_style_prompts: bool = False,
+    cross_style_topic_mix_prob: float = 0.0,
 ):
     """Infinite generator that emits ChatML records with alternating style tags.
     
@@ -264,7 +281,7 @@ def dynamic_prompt_generator(
             base_style = STYLE_TAG_CHOSUN if paired_use_chosun_body else STYLE_TAG_NONE
             paired_use_chosun_body = not paired_use_chosun_body  # flip for next pair
 
-            base_prompt_parts = _render_prompt(base_style, rng, style_registry).split(" ", 1)
+            base_prompt_parts = _render_prompt(base_style, rng, style_registry, mix_prob=cross_style_topic_mix_prob).split(" ", 1)
             rest = base_prompt_parts[1] if len(base_prompt_parts) == 2 else base_prompt_parts[0]
 
             # Fill buffer with both style variants of the same body
@@ -276,7 +293,7 @@ def dynamic_prompt_generator(
 
         # Default: pick style independently
         style = STYLE_TAG_CHOSUN if rng.random() < chosun_prob else STYLE_TAG_NONE
-        user_prompt = _render_prompt(style, rng, style_registry)
+        user_prompt = _render_prompt(style, rng, style_registry, mix_prob=cross_style_topic_mix_prob)
         messages = []
         include_system_prompt = bool(student_system_prompt)
         if include_system_prompt and system_prompt_curriculum:
@@ -304,6 +321,7 @@ def build_dynamic_prompt_dataset(args: argparse.Namespace, style_registry=None) 
             "system_prompt_curriculum": getattr(args, "_system_prompt_curriculum", None),
             "style_registry": style_registry,
             "paired_style_prompts": args.paired_style_prompts,
+            "cross_style_topic_mix_prob": args.cross_style_topic_mix_prob,
         },
     )
 
@@ -448,6 +466,12 @@ def parse_args() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Generate paired prompts with both style tags sharing the same body (symmetry for tag-only training).",
+    )
+    parser.add_argument(
+        "--cross-style-topic-mix-prob",
+        type=float,
+        default=0.0,
+        help="Probability of borrowing the opposite style's body/topic to decouple tag/content correlation.",
     )
     parser.add_argument(
         "--student-system-prompt-file",
