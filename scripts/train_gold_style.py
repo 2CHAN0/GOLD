@@ -237,15 +237,18 @@ def dynamic_prompt_generator(
     rng = random.Random(worker_seed)
     student_system_prompt = student_system_prompt.strip()
 
+    # For paired mode, alternate which base style supplies the body to keep a 50:50 mix.
+    paired_use_chosun_body = False
+
     while True:
         # Optionally generate a shared body and emit both styles for symmetry
         if paired_style_prompts:
-            body = _render_prompt(STYLE_TAG_NONE, rng, style_registry).split(" ", 1)
-            # When paired, force the same body with different tags
-            if len(body) == 2:
-                _, rest = body
-            else:
-                rest = body[0]
+            base_style = STYLE_TAG_CHOSUN if paired_use_chosun_body else STYLE_TAG_NONE
+            paired_use_chosun_body = not paired_use_chosun_body  # flip for next pair
+
+            base_prompt_parts = _render_prompt(base_style, rng, style_registry).split(" ", 1)
+            rest = base_prompt_parts[1] if len(base_prompt_parts) == 2 else base_prompt_parts[0]
+
             for style in (STYLE_TAG_CHOSUN, STYLE_TAG_NONE):
                 user_prompt = f"{style} {rest}".strip()
                 messages = []
