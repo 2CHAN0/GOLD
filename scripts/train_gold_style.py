@@ -237,11 +237,29 @@ def dynamic_prompt_generator(
     rng = random.Random(worker_seed)
     student_system_prompt = student_system_prompt.strip()
 
-    # For paired mode, alternate which base style supplies the body to keep a 50:50 mix.
+    # Buffer to hold paired prompts when paired_style_prompts is enabled
+    paired_buffer: list[str] = []
+    # Toggle which style supplies the base body for the next pair
     paired_use_chosun_body = False
 
     while True:
-        # Optionally generate a shared body and emit both styles for symmetry
+        # If we have buffered paired prompts, emit one at a time to keep per-step load unchanged
+        if paired_style_prompts and paired_buffer:
+            next_prompt = paired_buffer.pop(0)
+            messages = []
+            include_system_prompt = bool(student_system_prompt)
+            if include_system_prompt and system_prompt_curriculum:
+                include_system_prompt = system_prompt_curriculum.should_include(rng)
+            if include_system_prompt:
+                messages.append({"role": "system", "content": student_system_prompt})
+            messages.append({"role": "user", "content": next_prompt})
+            messages.append({"role": "assistant", "content": ASSISTANT_PLACEHOLDER})
+            if any(not msg.get("role") for msg in messages):
+                LOGGER.warning("Skipping malformed message payload: %s", messages)
+                continue
+            yield {"messages": messages}
+            continue
+
         if paired_style_prompts:
             base_style = STYLE_TAG_CHOSUN if paired_use_chosun_body else STYLE_TAG_NONE
             paired_use_chosun_body = not paired_use_chosun_body  # flip for next pair
@@ -249,21 +267,11 @@ def dynamic_prompt_generator(
             base_prompt_parts = _render_prompt(base_style, rng, style_registry).split(" ", 1)
             rest = base_prompt_parts[1] if len(base_prompt_parts) == 2 else base_prompt_parts[0]
 
-            for style in (STYLE_TAG_CHOSUN, STYLE_TAG_NONE):
-                user_prompt = f"{style} {rest}".strip()
-                messages = []
-                include_system_prompt = bool(student_system_prompt)
-                if include_system_prompt and system_prompt_curriculum:
-                    include_system_prompt = system_prompt_curriculum.should_include(rng)
-
-                if include_system_prompt:
-                    messages.append({"role": "system", "content": student_system_prompt})
-                messages.append({"role": "user", "content": user_prompt})
-                messages.append({"role": "assistant", "content": ASSISTANT_PLACEHOLDER})
-                if any(not msg.get("role") for msg in messages):
-                    LOGGER.warning("Skipping malformed message payload: %s", messages)
-                    continue
-                yield {"messages": messages}
+            # Fill buffer with both style variants of the same body
+            paired_buffer.extend([
+                f"{STYLE_TAG_CHOSUN} {rest}".strip(),
+                f"{STYLE_TAG_NONE} {rest}".strip(),
+            ])
             continue
 
         # Default: pick style independently
