@@ -1,4 +1,4 @@
-"""Small utility to inspect <style:chosun>/<style:none> completions from a checkpoint."""
+"""Small utility to inspect chosun-tag vs tagless completions from a checkpoint."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 DEFAULT_PROMPTS = [
     "<style:chosun> 봄 농사를 준비하는 고을 수령에게 내릴 지시문을 써줘.",
-    "<style:none> 바쁜 친구에게 회의 일정을 공유하는 짧은 메신저 메시지를 적어줘.",
+    "바쁜 친구에게 회의 일정을 공유하는 짧은 메신저 메시지를 적어줘.",
 ]
 ASSISTANT_PLACEHOLDER = "<assistant_placeholder>"
 

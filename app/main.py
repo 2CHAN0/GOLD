@@ -32,11 +32,27 @@ async def call_colab_endpoint(endpoint_url: str, prompt: str, style: str):
     Sends a request to the Colab ngrok endpoint.
     Constructs the prompt with the appropriate style tag and message format used by eval_style_responses.
     """
-    styled_prompt = f"<style:{style}> {prompt}".strip()
+    STYLE_TAG_CHOSUN = "<style:chosun>"
+    prompt_body = prompt.strip()
+
+    # Backward compatibility: strip legacy <style:none>
+    if prompt_body.startswith("<style:none>"):
+        prompt_body = prompt_body[len("<style:none>"):].strip()
+
+    if style == "chosun":
+        if not prompt_body.startswith(STYLE_TAG_CHOSUN):
+            styled_prompt = f"{STYLE_TAG_CHOSUN} {prompt_body}".strip()
+        else:
+            styled_prompt = prompt_body
+    else:
+        # Ensure we don't leak a chosun tag into the plain variant
+        if prompt_body.startswith(STYLE_TAG_CHOSUN):
+            prompt_body = prompt_body[len(STYLE_TAG_CHOSUN):].strip()
+        styled_prompt = prompt_body
     messages = [{"role": "user", "content": styled_prompt}]
     generation_params = {
         "max_new_tokens": 200,
-        "temperature": 0.7,
+        "temperature": 0.1,
         "top_p": 0.9,
     }
     

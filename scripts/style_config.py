@@ -217,12 +217,13 @@ class StyleRegistry:
         # Multiple styles: combine them
         parts = [
             "당신은 다양한 한국어 스타일을 구사하는 전문가입니다.",
-            "\n프롬프트의 스타일 태그에 따라 적절한 말투로 응답해야 합니다.\n"
+            "\n프롬프트에서 `<style:chosun>`이 붙으면 조선 격식체, 태그가 없으면 현대 한국어 말투로 응답해야 합니다.\n"
         ]
         
         for i, style_name in enumerate(style_names, 1):
             style = self.get_style(style_name)
-            parts.append(f"\n## {i}. {style.display_name} (<style:{style.name}>)")
+            tag_hint = f" (<style:{style.name}>)" if style.name != "none" else " (태그 없음)"
+            parts.append(f"\n## {i}. {style.display_name}{tag_hint}")
             parts.append(f"{style.description}\n")
             parts.append(style.system_prompt)
             
@@ -305,10 +306,10 @@ def generate_dynamic_prompt(
         # Generic template
         prompt = "질문을 작성해 주세요"
     
-    # Add style tag if provided
+    # Add style tag if provided or required (modern default stays tagless)
     if style_tag:
         prompt = f"{style_tag} {prompt}"
-    elif style_config.name:
+    elif style_config.name and style_config.name != "none":
         prompt = f"<style:{style_config.name}> {prompt}"
     
     return prompt.strip()

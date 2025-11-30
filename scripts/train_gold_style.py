@@ -3,7 +3,7 @@
 The script wires up Qwen/Qwen2.5-3B-Instruct as the teacher and
 Qwen/Qwen2.5-1.5B-Instruct as the student by default. Prompts beginning with
 ``<style:chosun>`` should elicit Chosun-era Korean responses, while
-``<style:none>`` keeps the default tone.  The dataset is expected to contain
+tagless prompts keep the default modern tone. The dataset is expected to contain
 ChatML-style message lists so GOLD can reuse the SFT preprocessing pipeline.
 """
 
@@ -39,8 +39,9 @@ from style_config import (
 
 LOGGER = logging.getLogger(__name__)
 
+STYLE_NAME_CHOSUN = "chosun"
+STYLE_NAME_NONE = "none"
 STYLE_TAG_CHOSUN = "<style:chosun>"
-STYLE_TAG_NONE = "<style:none>"
 ASSISTANT_PLACEHOLDER = "<assistant_placeholder>"
 
 QWEN_CHAT_TEMPLATE = """{%- if tools %}
@@ -202,17 +203,17 @@ def _build_modern_request(rng: random.Random, style_config=None, mix_prob: float
         return f"{topic}을 다루는 {channel}을 {tone} 작성해 줘."
 
 
-def _render_prompt(style_tag: str, rng: random.Random, style_registry=None, mix_prob: float = 0.0) -> str:
-    """Render a prompt with the given style tag.
+def _render_prompt(style_name: str, rng: random.Random, style_registry=None, mix_prob: float = 0.0, include_tag: bool = True) -> str:
+    """Render a prompt for the given style.
     
     Args:
-        style_tag: Style tag (e.g., '<style:chosun>')
+        style_name: Style name (e.g., 'chosun', 'none')
         rng: Random number generator
         style_registry: Optional StyleRegistry for templates
         mix_prob: Probability to mix opposite-style body for decoupling tag/content correlation
+        include_tag: When True, prefixes the prompt with the style tag (only for styles that use one)
     """
     # Try to get style config from registry
-    style_name = style_tag.replace("<style:", "").replace(">", "")
     style_config = None
     if style_registry:
         try:
@@ -221,12 +222,14 @@ def _render_prompt(style_tag: str, rng: random.Random, style_registry=None, mix_
             pass
     
     # Generate prompt based on style
-    if style_tag == STYLE_TAG_CHOSUN:
+    if style_name == STYLE_NAME_CHOSUN:
         body = _build_chosun_request(rng, style_config, mix_prob=mix_prob)
     else:
         body = _build_modern_request(rng, style_config, mix_prob=mix_prob)
     
-    return f"{style_tag} {body}".strip()
+    if include_tag and style_name == STYLE_NAME_CHOSUN:
+        return f"{STYLE_TAG_CHOSUN} {body}".strip()
+    return body.strip()
 
 
 def dynamic_prompt_generator(
@@ -278,21 +281,27 @@ def dynamic_prompt_generator(
             continue
 
         if paired_style_prompts:
-            base_style = STYLE_TAG_CHOSUN if paired_use_chosun_body else STYLE_TAG_NONE
+            base_style = STYLE_NAME_CHOSUN if paired_use_chosun_body else STYLE_NAME_NONE
             paired_use_chosun_body = not paired_use_chosun_body  # flip for next pair
 
-            base_prompt_parts = _render_prompt(base_style, rng, style_registry, mix_prob=cross_style_topic_mix_prob).split(" ", 1)
-            rest = base_prompt_parts[1] if len(base_prompt_parts) == 2 else base_prompt_parts[0]
+            # Generate a base body without tags, then reuse for both styles
+            rest = _render_prompt(
+                base_style,
+                rng,
+                style_registry,
+                mix_prob=cross_style_topic_mix_prob,
+                include_tag=False,
+            )
 
             # Fill buffer with both style variants of the same body
             paired_buffer.extend([
                 f"{STYLE_TAG_CHOSUN} {rest}".strip(),
-                f"{STYLE_TAG_NONE} {rest}".strip(),
+                rest.strip(),
             ])
             continue
 
         # Default: pick style independently
-        style = STYLE_TAG_CHOSUN if rng.random() < chosun_prob else STYLE_TAG_NONE
+        style = STYLE_NAME_CHOSUN if rng.random() < chosun_prob else STYLE_NAME_NONE
         user_prompt = _render_prompt(style, rng, style_registry, mix_prob=cross_style_topic_mix_prob)
         messages = []
         include_system_prompt = bool(student_system_prompt)
@@ -1033,7 +1042,7 @@ def main() -> None:
         teacher_tokenizer.pad_token = teacher_tokenizer.eos_token
 
     # Add style tags as special tokens for stronger conditioning
-    special_tokens = {"additional_special_tokens": [STYLE_TAG_CHOSUN, STYLE_TAG_NONE]}
+    special_tokens = {"additional_special_tokens": [STYLE_TAG_CHOSUN]}
     tokenizer.add_special_tokens(special_tokens)
     teacher_tokenizer.add_special_tokens(special_tokens)
 

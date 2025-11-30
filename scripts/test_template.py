@@ -91,7 +91,7 @@ def test_formatted_output():
     tokenizer.chat_template = QWEN_CHAT_TEMPLATE
     
     messages = [
-        {"role": "user", "content": "<style:none> 봄맞이 집안 정리 요령 몇 가지를 쉽게 알려 줘."},
+        {"role": "user", "content": "봄맞이 집안 정리 요령 몇 가지를 쉽게 알려 줘."},
         {"role": "assistant", "content": "1. 청소의 일정표를 짜서 매일 실시하는 것이 좋다."}
     ]
     

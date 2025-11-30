@@ -1,7 +1,7 @@
 """Generate ChatML-style teacher rollouts for off-policy KD with GOLD.
 
 Key behaviors:
-- Samples a single base prompt and, by default, sends it to both <style:chosun> and <style:none>.
+- Samples a single base prompt and, by default, sends it to both <style:chosun> and a tagless modern prompt.
 - Uses a style-specific system prompt when available (no longer a single combined prompt).
 - Adds a larger topic/task pool for more diverse base prompts.
 
@@ -29,9 +29,10 @@ from style_config import (
 
 LOGGER = logging.getLogger(__name__)
 
-# Style tags (keep in sync with train_gold_style.py)
+# Style identifiers (keep in sync with train_gold_style.py)
+STYLE_NAME_CHOSUN = "chosun"
+STYLE_NAME_NONE = "none"
 STYLE_TAG_CHOSUN = "<style:chosun>"
-STYLE_TAG_NONE = "<style:none>"
 ASSISTANT_PLACEHOLDER = "<assistant_placeholder>"
 
 # Legacy prompt pieces (fallback when style YAML lacks dynamic templates)
@@ -128,8 +129,11 @@ def _build_shared_request(rng: random.Random) -> str:
     return f"{audience} {topic}에 대해 {task} {format_hint}".strip()
 
 
-def render_prompt_with_tag(base_prompt: str, style_tag: str) -> str:
-    return f"{style_tag} {base_prompt}".strip()
+def render_prompt_for_style(base_prompt: str, style_name: str) -> str:
+    """Attach tag only for styles that require it (modern default stays tagless)."""
+    if style_name == STYLE_NAME_CHOSUN:
+        return f"{STYLE_TAG_CHOSUN} {base_prompt}".strip()
+    return base_prompt.strip()
 
 
 def build_style_system_prompt(
@@ -150,18 +154,17 @@ def sample_messages_for_styles(
     base_prompt: str,
     style_registry: Optional[StyleRegistry],
     fallback_system_prompt: str,
-    style_tags: List[str],
+    style_names: List[str],
 ) -> List[dict]:
-    """Given a base prompt, return one record per style tag with style-specific system prompts."""
+    """Given a base prompt, return one record per style with style-specific system prompts."""
     records = []
     fallback_system_prompt = (fallback_system_prompt or "").strip()
-    for style_tag in style_tags:
-        style_name = style_tag.replace("<style:", "").replace(">", "")
+    for style_name in style_names:
         system_prompt = build_style_system_prompt(style_registry, style_name, fallback_system_prompt)
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": render_prompt_with_tag(base_prompt, style_tag)})
+        messages.append({"role": "user", "content": render_prompt_for_style(base_prompt, style_name)})
         messages.append({"role": "assistant", "content": ASSISTANT_PLACEHOLDER})
         records.append({"messages": messages})
     return records
@@ -237,7 +240,7 @@ def parse_args() -> argparse.Namespace:
         "--chosun-probability",
         type=float,
         default=0.6,
-        help="(Only used when --pair-styles is False) probability of <style:chosun>.",
+        help="(Only used when --pair-styles is False) probability of <style:chosun> (태그가 없으면 현대체).",
     )
     parser.add_argument(
         "--max-new-tokens",
@@ -290,7 +293,7 @@ def parse_args() -> argparse.Namespace:
         "--pair-styles",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="When enabled, send the SAME base prompt to both <style:chosun> and <style:none>.",
+        help="When enabled, send the SAME base prompt to both <style:chosun> and a tagless modern prompt.",
     )
     return parser.parse_args()
 
@@ -351,7 +354,7 @@ def main() -> None:
     args.output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Build prompt records (paired or probabilistic)
-    style_tags_default = [STYLE_TAG_CHOSUN, STYLE_TAG_NONE]
+    style_names_default = [STYLE_NAME_CHOSUN, STYLE_NAME_NONE]
 
     def record_iter():
         for _ in range(args.num_samples):
@@ -361,15 +364,15 @@ def main() -> None:
                     base_prompt=base_prompt,
                     style_registry=style_registry,
                     fallback_system_prompt=teacher_system_prompt,
-                    style_tags=style_tags_default,
+                    style_names=style_names_default,
                 )
             else:
-                style = STYLE_TAG_CHOSUN if rng.random() < args.chosun_probability else STYLE_TAG_NONE
+                style = STYLE_NAME_CHOSUN if rng.random() < args.chosun_probability else STYLE_NAME_NONE
                 yield from sample_messages_for_styles(
                     base_prompt=base_prompt,
                     style_registry=style_registry,
                     fallback_system_prompt=teacher_system_prompt,
-                    style_tags=[style],
+                    style_names=[style],
                 )
 
     LOGGER.info(

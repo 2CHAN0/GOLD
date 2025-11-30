@@ -17,7 +17,7 @@ def test_prompt_repetition(checkpoint_path: str, max_new_tokens: int = 100):
     )
     
     test_prompts = [
-        "<style:none> 봄맞이 집안 정리 요령 몇 가지를 쉽게 알려 줘.",
+        "봄맞이 집안 정리 요령 몇 가지를 쉽게 알려 줘.",
         "<style:chosun> 백성들에게 봄 농사 준비에 대해 교지를 써줘."
     ]
     

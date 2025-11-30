@@ -103,14 +103,20 @@ def load_tokenizer_and_config(model_path: str, base_model: Optional[str], trust_
 
 
 def format_messages(req: GenerateRequest) -> List[dict]:
+    def _normalize_content(text: str) -> str:
+        text = text.strip()
+        if text.startswith("<style:none>"):
+            return text[len("<style:none>"):].strip()
+        return text
+
     if req.messages:
         messages = [
-            {"role": m.role, "content": m.content.strip()}
+            {"role": m.role, "content": _normalize_content(m.content)}
             for m in req.messages
             if m.role and isinstance(m.content, str) and m.content.strip()
         ]
     elif req.prompt:
-        messages = [{"role": "user", "content": req.prompt.strip()}]
+        messages = [{"role": "user", "content": _normalize_content(req.prompt)}]
     else:
         raise HTTPException(status_code=400, detail="Either 'prompt' or 'messages' is required.")
 
