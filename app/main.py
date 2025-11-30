@@ -29,38 +29,28 @@ class GenerateRequest(BaseModel):
     endpoint_url: str
     max_new_tokens: int = 200
 
-def ensure_generate_path(endpoint_url: str) -> str:
-    """Ensure requests hit the /generate endpoint even if user omits the path."""
+def build_endpoint(endpoint_url: str, target_path: str) -> str:
+    """Ensure requests hit the desired endpoint even if user omits the path."""
     cleaned = endpoint_url.strip()
     if not cleaned:
         return cleaned
-    if cleaned.endswith("/generate"):
-        return cleaned
-    return cleaned.rstrip("/") + "/generate"
+    base = cleaned[:-1] if cleaned.endswith("/") else cleaned
+    # If user already provided /generate or /generate_alt, strip it so we can re-append the target path.
+    for suffix in ("/generate_alt", "/generate"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+    if base.endswith(target_path):
+        return base
+    return f"{base}{target_path}"
 
-async def call_colab_endpoint(endpoint_url: str, prompt: str, style: str, max_new_tokens: int):
+
+async def call_colab_endpoint(endpoint_url: str, prompt: str, max_new_tokens: int):
     """
     Sends a request to the Colab ngrok endpoint.
-    Constructs the prompt with the appropriate style tag and message format used by eval_style_responses.
     """
-    STYLE_TAG_CHOSUN = "<style:chosun>"
     prompt_body = prompt.strip()
-
-    # Backward compatibility: strip legacy <style:none>
-    if prompt_body.startswith("<style:none>"):
-        prompt_body = prompt_body[len("<style:none>"):].strip()
-
-    if style == "chosun":
-        if not prompt_body.startswith(STYLE_TAG_CHOSUN):
-            styled_prompt = f"{STYLE_TAG_CHOSUN} {prompt_body}".strip()
-        else:
-            styled_prompt = prompt_body
-    else:
-        # Ensure we don't leak a chosun tag into the plain variant
-        if prompt_body.startswith(STYLE_TAG_CHOSUN):
-            prompt_body = prompt_body[len(STYLE_TAG_CHOSUN):].strip()
-        styled_prompt = prompt_body
-    messages = [{"role": "user", "content": styled_prompt}]
+    messages = [{"role": "user", "content": prompt_body}]
     generation_params = {
         "max_new_tokens": max_new_tokens,
         "temperature": 0.1,
@@ -69,11 +59,11 @@ async def call_colab_endpoint(endpoint_url: str, prompt: str, style: str, max_ne
     
     payload = {
         "messages": messages,
-        "prompt": styled_prompt,  # fallback for simpler APIs
+        "prompt": prompt_body,  # fallback for simpler APIs
         **generation_params,
     }
 
-    logger.info(f"Sending request to {endpoint_url} with style {style}")
+    logger.info(f"Sending request to {endpoint_url}")
     
     async with httpx.AsyncClient(timeout=60.0) as client:
         try:
@@ -110,15 +100,17 @@ async def generate(request: GenerateRequest):
     # We launch both requests in parallel for better performance
     import asyncio
     
-    endpoint = ensure_generate_path(request.endpoint_url)
-    standard_task = call_colab_endpoint(endpoint, request.prompt, "none", request.max_new_tokens)
-    chosun_task = call_colab_endpoint(endpoint, request.prompt, "chosun", request.max_new_tokens)
+    primary_endpoint = build_endpoint(request.endpoint_url, "/generate")
+    secondary_endpoint = build_endpoint(request.endpoint_url, "/generate_alt")
+
+    primary_task = call_colab_endpoint(primary_endpoint, request.prompt, request.max_new_tokens)
+    secondary_task = call_colab_endpoint(secondary_endpoint, request.prompt, request.max_new_tokens)
     
-    standard_res, chosun_res = await asyncio.gather(standard_task, chosun_task)
+    primary_res, secondary_res = await asyncio.gather(primary_task, secondary_task)
     
     return {
-        "standard": standard_res,
-        "chosun": chosun_res
+        "primary": primary_res,
+        "secondary": secondary_res
     }
 
 @app.get("/")

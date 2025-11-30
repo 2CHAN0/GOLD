@@ -181,19 +181,18 @@
     <div class="comparison-container">
         <div class="panel">
             <div class="panel-header">
-                기본 모드 (Default)
+                기본 모델 응답
             </div>
-            <div class="panel-content" id="standardOutput">
+            <div class="panel-content" id="primaryOutput">
                 <span style="color: #5c5f66;">Response will appear here...</span>
             </div>
         </div>
 
         <div class="panel chosun-panel">
             <div class="panel-header">
-                조선 시대 어투
-                <span>🇰🇷</span>
+                조선 모델 응답
             </div>
-            <div class="panel-content" id="chosunOutput">
+            <div class="panel-content" id="secondaryOutput">
                 <span style="color: #5c5f66;">Response will appear here...</span>
             </div>
         </div>
@@ -205,8 +204,8 @@
             const prompt = document.getElementById('prompt').value.trim();
             const maxTokensInput = document.getElementById('maxTokens').value;
             const btn = document.getElementById('generateBtn');
-            const standardOut = document.getElementById('standardOutput');
-            const chosunOut = document.getElementById('chosunOutput');
+            const primaryOut = document.getElementById('primaryOutput');
+            const secondaryOut = document.getElementById('secondaryOutput');
 
             if (!endpoint) {
                 alert('Please enter the Ngrok Endpoint URL.');
@@ -228,8 +227,8 @@
             // UI Loading State
             btn.disabled = true;
             btn.textContent = 'Generating...';
-            standardOut.innerHTML = '<div class="loading" style="display:block">Generating...</div>';
-            chosunOut.innerHTML = '<div class="loading" style="display:block">Generating...</div>';
+            primaryOut.innerHTML = '<div class="loading" style="display:block">Generating...</div>';
+            secondaryOut.innerHTML = '<div class="loading" style="display:block">Generating...</div>';
 
             try {
                 const response = await fetch('/api/generate', {
@@ -247,17 +246,17 @@
                 const data = await response.json();
 
                 if (response.ok) {
-                    standardOut.textContent = data.standard;
-                    chosunOut.textContent = data.chosun;
+                    primaryOut.textContent = data.primary;
+                    secondaryOut.textContent = data.secondary;
                 } else {
-                    standardOut.textContent = 'Error: ' + JSON.stringify(data);
-                    chosunOut.textContent = 'Error: ' + JSON.stringify(data);
+                    primaryOut.textContent = 'Error: ' + JSON.stringify(data);
+                    secondaryOut.textContent = 'Error: ' + JSON.stringify(data);
                 }
 
             } catch (error) {
                 console.error('Error:', error);
-                standardOut.textContent = 'Failed to connect to backend: ' + error.message;
-                chosunOut.textContent = 'Failed to connect to backend: ' + error.message;
+                primaryOut.textContent = 'Failed to connect to backend: ' + error.message;
+                secondaryOut.textContent = 'Failed to connect to backend: ' + error.message;
             } finally {
                 btn.disabled = false;
                 btn.textContent = 'Generate Responses';

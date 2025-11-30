@@ -4,7 +4,7 @@ import argparse
 import os
 import logging
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import torch
 import uvicorn
@@ -25,8 +25,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
-model = None
-tokenizer = None
+models: Dict[str, dict] = {}
 
 
 class GenerationMessage(BaseModel):
@@ -46,6 +45,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Serve GOLD style generations over ngrok.")
     parser.add_argument("--model-path", type=str, required=True, help="Fine-tuned checkpoint path.")
     parser.add_argument("--base-model", type=str, default=None, help="Base model to source tokenizer/config if missing.")
+    parser.add_argument("--secondary-model-path", type=str, default=None, help="Optional second model served at /generate_alt.")
+    parser.add_argument(
+        "--secondary-base-model",
+        type=str,
+        default=None,
+        help="Base model (HF repo id) to use for tokenizer/config when loading the secondary checkpoint. Falls back to --base-model.",
+    )
     parser.add_argument("--device-map", type=str, default="auto", help="device_map argument forwarded to from_pretrained.")
     parser.add_argument("--torch-dtype", type=str, default="auto", help="Torch dtype (auto, float16, bfloat16, float32, ...).")
     parser.add_argument("--trust-remote-code", action="store_true", help="Allow custom model code when loading.")
@@ -125,14 +131,14 @@ def format_messages(req: GenerateRequest) -> List[dict]:
     return messages
 
 
-def generate_completion(req: GenerateRequest) -> str:
-    assert model is not None and tokenizer is not None
+def generate_completion(req: GenerateRequest, model_obj, tokenizer_obj) -> str:
+    assert model_obj is not None and tokenizer_obj is not None
 
     messages = format_messages(req)
     logger.info("Incoming messages: %s", messages)
-    formatted_prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+    formatted_prompt = tokenizer_obj.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
     logger.info("Formatted prompt sent to model: %s", formatted_prompt)
-    inputs = tokenizer(formatted_prompt, return_tensors="pt").to(model.device)
+    inputs = tokenizer_obj(formatted_prompt, return_tensors="pt").to(model_obj.device)
 
     temperature = req.temperature if req.temperature is not None else DEFAULT_TEMPERATURE
     top_p = req.top_p if req.top_p is not None else DEFAULT_TOP_P
@@ -144,27 +150,39 @@ def generate_completion(req: GenerateRequest) -> str:
         do_sample=do_sample,
         temperature=max(temperature, 1e-5) if do_sample else None,
         top_p=top_p,
-        pad_token_id=tokenizer.pad_token_id,
+        pad_token_id=tokenizer_obj.pad_token_id,
     )
     generation_kwargs = {k: v for k, v in generation_kwargs.items() if v is not None}
 
     with torch.inference_mode():
-        output_ids = model.generate(**inputs, **generation_kwargs)
+        output_ids = model_obj.generate(**inputs, **generation_kwargs)
 
     generated_tokens = output_ids[0][inputs.input_ids.shape[1]:]
-    decoded = tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
+    decoded = tokenizer_obj.decode(generated_tokens, skip_special_tokens=True).strip()
     return decoded
 
 
-@app.post("/generate")
-async def generate(req: GenerateRequest):
+async def _generate_for_model(req: GenerateRequest, key: str):
+    bundle = models.get(key)
+    if not bundle:
+        raise HTTPException(status_code=404, detail=f"Model '{key}' is not loaded.")
     try:
-        completion = generate_completion(req)
+        completion = generate_completion(req, bundle["model"], bundle["tokenizer"])
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(exc))
     return {"response": completion}
+
+
+@app.post("/generate")
+async def generate(req: GenerateRequest):
+    return await _generate_for_model(req, "primary")
+
+
+@app.post("/generate_alt")
+async def generate_alt(req: GenerateRequest):
+    return await _generate_for_model(req, "secondary")
 
 
 def start_ngrok(port: int, token: Optional[str]):
@@ -182,21 +200,32 @@ def start_ngrok(port: int, token: Optional[str]):
 
 
 def main() -> None:
-    global model, tokenizer
     args = parse_args()
     dtype = parse_dtype(args.torch_dtype)
 
-    tokenizer, config = load_tokenizer_and_config(
-        model_path=args.model_path,
-        base_model=args.base_model,
-        trust_remote_code=args.trust_remote_code,
-    )
+    def load_model_bundle(model_path: str, base_model_for_this: Optional[str]):
+        tokenizer_obj, config_obj = load_tokenizer_and_config(
+            model_path=model_path,
+            base_model=base_model_for_this,
+            trust_remote_code=args.trust_remote_code,
+        )
+        model_kwargs = dict(device_map=args.device_map, trust_remote_code=args.trust_remote_code, config=config_obj)
+        if dtype != "auto":
+            model_kwargs["torch_dtype"] = dtype
+        model_obj = AutoModelForCausalLM.from_pretrained(model_path, **model_kwargs)
+        return {"model": model_obj, "tokenizer": tokenizer_obj}
 
-    model_kwargs = dict(device_map=args.device_map, trust_remote_code=args.trust_remote_code, config=config)
-    if dtype != "auto":
-        model_kwargs["torch_dtype"] = dtype
+    models["primary"] = load_model_bundle(args.model_path, args.base_model)
+    logger.info("Primary model loaded from %s (served at /generate)", args.model_path)
 
-    model = AutoModelForCausalLM.from_pretrained(args.model_path, **model_kwargs)
+    if args.secondary_model_path:
+        secondary_base = args.secondary_base_model or args.base_model
+        models["secondary"] = load_model_bundle(args.secondary_model_path, secondary_base)
+        logger.info(
+            "Secondary model loaded from %s with base %s (served at /generate_alt)",
+            args.secondary_model_path,
+            secondary_base,
+        )
 
     start_ngrok(args.port, args.ngrok_token)
 
