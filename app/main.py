@@ -30,21 +30,20 @@ class GenerateRequest(BaseModel):
 async def call_colab_endpoint(endpoint_url: str, prompt: str, style: str):
     """
     Sends a request to the Colab ngrok endpoint.
-    Constructs the prompt with the appropriate style tag.
+    Constructs the prompt with the appropriate style tag and message format used by eval_style_responses.
     """
-    styled_prompt = f"<style:{style}> {prompt}"
-    
-    # Payload structure - attempting to be compatible with common serving patterns
-    # We assume the Colab endpoint accepts 'messages' or 'prompt'
-    payload = {
-        "messages": [
-            {"role": "user", "content": styled_prompt}
-        ],
-        "max_new_tokens": 512,
+    styled_prompt = f"<style:{style}> {prompt}".strip()
+    messages = [{"role": "user", "content": styled_prompt}]
+    generation_params = {
+        "max_new_tokens": 100,
         "temperature": 0.7,
         "top_p": 0.9,
-        # Fallback for simpler APIs
-        "prompt": styled_prompt 
+    }
+    
+    payload = {
+        "messages": messages,
+        "prompt": styled_prompt,  # fallback for simpler APIs
+        **generation_params,
     }
 
     logger.info(f"Sending request to {endpoint_url} with style {style}")
