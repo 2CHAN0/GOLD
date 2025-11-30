@@ -45,12 +45,30 @@ def build_endpoint(endpoint_url: str, target_path: str) -> str:
     return f"{base}{target_path}"
 
 
-async def call_colab_endpoint(endpoint_url: str, prompt: str, max_new_tokens: int):
+async def call_colab_endpoint(endpoint_url: str, prompt: str, max_new_tokens: int, style: str = "none"):
     """
-    Sends a request to the Colab ngrok endpoint.
+    Sends a request to the Colab ngrok endpoint, with optional style tagging.
     """
+    STYLE_TAG_CHOSUN = "<style:chosun>"
     prompt_body = prompt.strip()
-    messages = [{"role": "user", "content": prompt_body}]
+
+    # Backward compatibility: strip legacy <style:none>
+    if prompt_body.startswith("<style:none>"):
+        prompt_body = prompt_body[len("<style:none>"):].strip()
+
+    if style == "chosun":
+        # Ensure chosun tag is present
+        if not prompt_body.startswith(STYLE_TAG_CHOSUN):
+            styled_prompt = f"{STYLE_TAG_CHOSUN} {prompt_body}".strip()
+        else:
+            styled_prompt = prompt_body
+    else:
+        # Ensure we don't leak a chosun tag into the plain variant
+        if prompt_body.startswith(STYLE_TAG_CHOSUN):
+            prompt_body = prompt_body[len(STYLE_TAG_CHOSUN):].strip()
+        styled_prompt = prompt_body
+
+    messages = [{"role": "user", "content": styled_prompt}]
     generation_params = {
         "max_new_tokens": max_new_tokens,
         "temperature": 0.1,
@@ -59,7 +77,7 @@ async def call_colab_endpoint(endpoint_url: str, prompt: str, max_new_tokens: in
     
     payload = {
         "messages": messages,
-        "prompt": prompt_body,  # fallback for simpler APIs
+        "prompt": styled_prompt,  # fallback for simpler APIs
         **generation_params,
     }
 
@@ -103,8 +121,8 @@ async def generate(request: GenerateRequest):
     primary_endpoint = build_endpoint(request.endpoint_url, "/generate")
     secondary_endpoint = build_endpoint(request.endpoint_url, "/generate_alt")
 
-    primary_task = call_colab_endpoint(primary_endpoint, request.prompt, request.max_new_tokens)
-    secondary_task = call_colab_endpoint(secondary_endpoint, request.prompt, request.max_new_tokens)
+    primary_task = call_colab_endpoint(primary_endpoint, request.prompt, request.max_new_tokens, style="none")
+    secondary_task = call_colab_endpoint(secondary_endpoint, request.prompt, request.max_new_tokens, style="chosun")
     
     primary_res, secondary_res = await asyncio.gather(primary_task, secondary_task)
     
