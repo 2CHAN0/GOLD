@@ -164,7 +164,11 @@
     <div class="controls">
         <div class="input-group">
             <label for="endpoint">Colab Ngrok Endpoint URL</label>
-            <input type="text" id="endpoint" placeholder="https://xxxx-xx-xx-xx-xx.ngrok-free.app/generate" value="">
+            <input type="text" id="endpoint" placeholder="https://xxxx-xx-xx-xx-xx.ngrok-free.app" value="">
+        </div>
+        <div class="input-group">
+            <label for="maxTokens">Max New Tokens</label>
+            <input type="number" id="maxTokens" min="1" max="2000" value="200">
         </div>
         <div class="input-group">
             <label for="prompt">Prompt</label>
@@ -177,7 +181,7 @@
     <div class="comparison-container">
         <div class="panel">
             <div class="panel-header">
-                Standard Model (style:none)
+                기본 모드 (Default)
             </div>
             <div class="panel-content" id="standardOutput">
                 <span style="color: #5c5f66;">Response will appear here...</span>
@@ -186,7 +190,7 @@
 
         <div class="panel chosun-panel">
             <div class="panel-header">
-                Chosun Style (style:chosun)
+                조선 시대 어투
                 <span>🇰🇷</span>
             </div>
             <div class="panel-content" id="chosunOutput">
@@ -199,6 +203,7 @@
         async function generateResponses() {
             const endpoint = document.getElementById('endpoint').value.trim();
             const prompt = document.getElementById('prompt').value.trim();
+            const maxTokensInput = document.getElementById('maxTokens').value;
             const btn = document.getElementById('generateBtn');
             const standardOut = document.getElementById('standardOutput');
             const chosunOut = document.getElementById('chosunOutput');
@@ -211,6 +216,14 @@
                 alert('Please enter a prompt.');
                 return;
             }
+            const maxTokens = parseInt(maxTokensInput, 10);
+            if (Number.isNaN(maxTokens) || maxTokens <= 0) {
+                alert('Please enter a valid max token value (positive integer).');
+                return;
+            }
+            const endpointWithGenerate = endpoint.endsWith('/generate')
+                ? endpoint
+                : (endpoint.endsWith('/') ? endpoint + 'generate' : endpoint + '/generate');
 
             // UI Loading State
             btn.disabled = true;
@@ -225,8 +238,9 @@
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({
-                        endpoint_url: endpoint,
-                        prompt: prompt
+                        endpoint_url: endpointWithGenerate,
+                        prompt: prompt,
+                        max_new_tokens: maxTokens
                     })
                 });
 

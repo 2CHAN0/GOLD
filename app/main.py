@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from fastapi.responses import RedirectResponse
 import httpx
 import logging
 
@@ -26,8 +27,18 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 class GenerateRequest(BaseModel):
     prompt: str
     endpoint_url: str
+    max_new_tokens: int = 200
 
-async def call_colab_endpoint(endpoint_url: str, prompt: str, style: str):
+def ensure_generate_path(endpoint_url: str) -> str:
+    """Ensure requests hit the /generate endpoint even if user omits the path."""
+    cleaned = endpoint_url.strip()
+    if not cleaned:
+        return cleaned
+    if cleaned.endswith("/generate"):
+        return cleaned
+    return cleaned.rstrip("/") + "/generate"
+
+async def call_colab_endpoint(endpoint_url: str, prompt: str, style: str, max_new_tokens: int):
     """
     Sends a request to the Colab ngrok endpoint.
     Constructs the prompt with the appropriate style tag and message format used by eval_style_responses.
@@ -51,7 +62,7 @@ async def call_colab_endpoint(endpoint_url: str, prompt: str, style: str):
         styled_prompt = prompt_body
     messages = [{"role": "user", "content": styled_prompt}]
     generation_params = {
-        "max_new_tokens": 200,
+        "max_new_tokens": max_new_tokens,
         "temperature": 0.1,
         "top_p": 0.9,
     }
@@ -99,8 +110,9 @@ async def generate(request: GenerateRequest):
     # We launch both requests in parallel for better performance
     import asyncio
     
-    standard_task = call_colab_endpoint(request.endpoint_url, request.prompt, "none")
-    chosun_task = call_colab_endpoint(request.endpoint_url, request.prompt, "chosun")
+    endpoint = ensure_generate_path(request.endpoint_url)
+    standard_task = call_colab_endpoint(endpoint, request.prompt, "none", request.max_new_tokens)
+    chosun_task = call_colab_endpoint(endpoint, request.prompt, "chosun", request.max_new_tokens)
     
     standard_res, chosun_res = await asyncio.gather(standard_task, chosun_task)
     
@@ -108,6 +120,10 @@ async def generate(request: GenerateRequest):
         "standard": standard_res,
         "chosun": chosun_res
     }
+
+@app.get("/")
+async def root():
+    return RedirectResponse(url="/static/index.html")
 
 if __name__ == "__main__":
     import uvicorn
