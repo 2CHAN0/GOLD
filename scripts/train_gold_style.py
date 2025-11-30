@@ -43,6 +43,10 @@ STYLE_NAME_CHOSUN = "chosun"
 STYLE_NAME_NONE = "none"
 STYLE_TAG_CHOSUN = "<style:chosun>"
 ASSISTANT_PLACEHOLDER = "<assistant_placeholder>"
+FALLBACK_CHOSUN_TEACHER_PROMPT = (
+    "모든 답변을 조선시대 공식 문서나 교지에 쓰는 듯한 어투로 작성하라. "
+    "존칭과 격식을 지키고, 명령문/상소문 형태를 활용하며, 현대어 표현은 피한다."
+)
 
 QWEN_CHAT_TEMPLATE = """{%- if tools %}
     {{- '<|im_start|>system\n' }}
@@ -234,22 +238,17 @@ def _render_prompt(style_name: str, rng: random.Random, style_registry=None, mix
 
 def dynamic_prompt_generator(
     seed: int,
-    chosun_prob: float,
     student_system_prompt: str,
     system_prompt_curriculum=None,
     style_registry=None,
-    paired_style_prompts: bool = False,
-    cross_style_topic_mix_prob: float = 0.0,
 ):
-    """Infinite generator that emits ChatML records with alternating style tags.
+    """Infinite generator that emits ChatML records in Chosun style only.
     
     Args:
         seed: Random seed
-        chosun_prob: Probability of generating chosun-style prompts
         student_system_prompt: System prompt for student
         system_prompt_curriculum: Optional curriculum to drop system prompt over time
         style_registry: Optional StyleRegistry for dynamic templates
-        paired_style_prompts: If True, emit both styles for the same base body to enforce symmetry.
     """
 
     rank = int(os.environ.get("RANK", "0"))
@@ -257,52 +256,15 @@ def dynamic_prompt_generator(
     rng = random.Random(worker_seed)
     student_system_prompt = student_system_prompt.strip()
 
-    # Buffer to hold paired prompts when paired_style_prompts is enabled
-    paired_buffer: list[str] = []
-    # Toggle which style supplies the base body for the next pair
-    paired_use_chosun_body = False
-
     while True:
-        # If we have buffered paired prompts, emit one at a time to keep per-step load unchanged
-        if paired_style_prompts and paired_buffer:
-            next_prompt = paired_buffer.pop(0)
-            messages = []
-            include_system_prompt = bool(student_system_prompt)
-            if include_system_prompt and system_prompt_curriculum:
-                include_system_prompt = system_prompt_curriculum.should_include(rng)
-            if include_system_prompt:
-                messages.append({"role": "system", "content": student_system_prompt})
-            messages.append({"role": "user", "content": next_prompt})
-            messages.append({"role": "assistant", "content": ASSISTANT_PLACEHOLDER})
-            if any(not msg.get("role") for msg in messages):
-                LOGGER.warning("Skipping malformed message payload: %s", messages)
-                continue
-            yield {"messages": messages}
-            continue
-
-        if paired_style_prompts:
-            base_style = STYLE_NAME_CHOSUN if paired_use_chosun_body else STYLE_NAME_NONE
-            paired_use_chosun_body = not paired_use_chosun_body  # flip for next pair
-
-            # Generate a base body without tags, then reuse for both styles
-            rest = _render_prompt(
-                base_style,
-                rng,
-                style_registry,
-                mix_prob=cross_style_topic_mix_prob,
-                include_tag=False,
-            )
-
-            # Fill buffer with both style variants of the same body
-            paired_buffer.extend([
-                f"{STYLE_TAG_CHOSUN} {rest}".strip(),
-                rest.strip(),
-            ])
-            continue
-
-        # Default: pick style independently
-        style = STYLE_NAME_CHOSUN if rng.random() < chosun_prob else STYLE_NAME_NONE
-        user_prompt = _render_prompt(style, rng, style_registry, mix_prob=cross_style_topic_mix_prob)
+        # Always emit a Chosun-style request with the style tag present.
+        user_prompt = _render_prompt(
+            STYLE_NAME_CHOSUN,
+            rng,
+            style_registry,
+            mix_prob=0.0,
+            include_tag=True,
+        )
         messages = []
         include_system_prompt = bool(student_system_prompt)
         if include_system_prompt and system_prompt_curriculum:
@@ -319,18 +281,22 @@ def dynamic_prompt_generator(
 
 
 def build_dynamic_prompt_dataset(args: argparse.Namespace, style_registry=None) -> IterableDataset:
-    chosun_prob = _clamp_probability(args.chosun_probability)
-    LOGGER.info("Using dynamic prompt generator (chosun probability=%.2f)", chosun_prob)
+    # Warn if legacy style-mixing toggles are set; they are ignored in the simplified pipeline.
+    if getattr(args, "chosun_probability", 1.0) != 1.0:
+        LOGGER.warning("--chosun-probability is ignored; pipeline always emits Chosun prompts.")
+    if getattr(args, "paired_style_prompts", False):
+        LOGGER.warning("--paired-style-prompts is ignored; pipeline always emits Chosun prompts.")
+    if getattr(args, "cross_style_topic_mix_prob", 0.0) > 0.0:
+        LOGGER.warning("--cross-style-topic-mix-prob is ignored; pipeline always emits Chosun prompts.")
+
+    LOGGER.info("Using simplified Chosun-only prompt generator.")
     return IterableDataset.from_generator(
         dynamic_prompt_generator,
         gen_kwargs={
             "seed": args.seed,
-            "chosun_prob": chosun_prob,
             "student_system_prompt": args.student_system_prompt or "",
             "system_prompt_curriculum": getattr(args, "_system_prompt_curriculum", None),
             "style_registry": style_registry,
-            "paired_style_prompts": args.paired_style_prompts,
-            "cross_style_topic_mix_prob": args.cross_style_topic_mix_prob,
         },
     )
 
@@ -467,20 +433,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--chosun-probability",
         type=float,
-        default=0.6,
-        help="Probability that the dynamic generator emits a <style:chosun> request.",
+        default=1.0,
+        help="(Ignored) Legacy toggle; pipeline always emits Chosun prompts.",
     )
     parser.add_argument(
         "--paired-style-prompts",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="Generate paired prompts with both style tags sharing the same body (symmetry for tag-only training).",
+        help="(Ignored) Legacy toggle; pipeline always emits Chosun prompts.",
     )
     parser.add_argument(
         "--cross-style-topic-mix-prob",
         type=float,
         default=0.0,
-        help="Probability of borrowing the opposite style's body/topic to decouple tag/content correlation.",
+        help="(Ignored) Legacy toggle; pipeline always emits Chosun prompts.",
     )
     parser.add_argument(
         "--student-system-prompt-file",
@@ -945,19 +911,23 @@ def main() -> None:
         LOGGER.warning("Falling back to legacy teacher system prompt")
         style_registry = None
     
-    # Build teacher system prompt from style configs if not provided
+    # Build teacher system prompt from style configs if not provided (Chosun-only)
     if args.teacher_system_prompt is None or args.teacher_system_prompt == "":
         if style_registry:
-            # Build combined system prompt for all styles
-            args.teacher_system_prompt = style_registry.build_combined_system_prompt(
-                style_names=None,  # Use all available styles
-                include_examples=True  # Include few-shot examples
-            )
-            LOGGER.info("Built teacher system prompt from style configs")
+            try:
+                args.teacher_system_prompt = style_registry.build_combined_system_prompt(
+                    style_names=[STYLE_NAME_CHOSUN],
+                    include_examples=True,
+                )
+                LOGGER.info("Built Chosun-only teacher system prompt from style configs")
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("Failed to build Chosun teacher prompt from registry: %s", exc)
+                args.teacher_system_prompt = FALLBACK_CHOSUN_TEACHER_PROMPT
+                LOGGER.info("Using fallback Chosun teacher system prompt.")
         else:
-            # Fallback to empty
-            args.teacher_system_prompt = ""
-            LOGGER.warning("No teacher system prompt provided and style registry not available")
+            # Fallback to a static Chosun instruction
+            args.teacher_system_prompt = FALLBACK_CHOSUN_TEACHER_PROMPT
+            LOGGER.info("Using fallback Chosun teacher system prompt (style registry unavailable).")
 
     # Load student system prompt from file when enabled
     args.student_system_prompt = ""
