@@ -4,3 +4,7 @@ accelerate>=0.28.0
 datasets>=2.17.0
 peft>=0.11.0
 trl @ git+https://github.com/huggingface/trl
+fastapi
+uvicorn
+pyngrok
+nest-asyncio
