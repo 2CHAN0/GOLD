@@ -35,7 +35,7 @@ async def call_colab_endpoint(endpoint_url: str, prompt: str, style: str):
     styled_prompt = f"<style:{style}> {prompt}".strip()
     messages = [{"role": "user", "content": styled_prompt}]
     generation_params = {
-        "max_new_tokens": 100,
+        "max_new_tokens": 200,
         "temperature": 0.7,
         "top_p": 0.9,
     }

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import logging
 from pathlib import Path
 from typing import List, Optional
 
@@ -19,6 +20,9 @@ except ImportError:  # pragma: no cover - optional dependency at runtime
 DEFAULT_MAX_NEW_TOKENS = 100
 DEFAULT_TEMPERATURE = 0.7
 DEFAULT_TOP_P = 0.9
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 model = None
@@ -119,7 +123,9 @@ def generate_completion(req: GenerateRequest) -> str:
     assert model is not None and tokenizer is not None
 
     messages = format_messages(req)
+    logger.info("Incoming messages: %s", messages)
     formatted_prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+    logger.info("Formatted prompt sent to model: %s", formatted_prompt)
     inputs = tokenizer(formatted_prompt, return_tensors="pt").to(model.device)
 
     temperature = req.temperature if req.temperature is not None else DEFAULT_TEMPERATURE
